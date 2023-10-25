@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "fractal-database"
+version = "0.1.0"
+description = ""
+authors = ["Mo Balaa <balaa@fractalnetworks.co>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
