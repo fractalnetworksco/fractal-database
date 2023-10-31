@@ -12,3 +12,16 @@ python = "^3.10"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+
+[tool.poetry.scripts]
+fractal = "fractal_database.cli.__main__:main"
+
+[tool.poetry.plugins."fractal_database.entrypoint"]
+"fractal_database" = "fractal_database.cli"
+
+[tool.poetry.plugins."fractal_database.plugins"]
+"db" = "fractal_database.controllers.fractal_database_controller"
+"test" = "fractal_database.controllers.fractal_database_controller2"
+"login" = "fractal.controllers.login"
+
