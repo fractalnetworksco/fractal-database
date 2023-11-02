@@ -9,6 +9,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.serializers import serialize
 from django.db import models
 
+from .fields import SingletonField
+
 logger = logging.getLogger("django")
 
 
@@ -40,10 +42,10 @@ class ReplicatedModel(BaseModel):
     # Stores a map of representation data associated with each of the model's replication targets
     # for example, a model that replicated to a MatrixReplicationTarget will store its associated
     # Matrix room_id in this property
-    repr_metadata = models.JSONField()
-    # database = models.ForeignKey(
-    #    "Database", on_delete=models.CASCADE, related_name="%(app_label)s_%(class)s_database"
-    # )
+    repr_metadata = models.JSONField(default=dict)
+    database = models.ForeignKey(
+        "Database", on_delete=models.CASCADE, related_name="%(app_label)s_%(class)s_database"
+    )
 
     class Meta:
         abstract = True
@@ -51,12 +53,19 @@ class ReplicatedModel(BaseModel):
     @classmethod
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        from fractal_database.signals import object_post_save
+        from fractal_database.signals import object_post_save, set_object_database
 
+        models.signals.pre_save.connect(set_object_database, sender=cls)
         models.signals.post_save.connect(object_post_save, sender=cls)
 
     def schedule_replication(self):
-        targets = Database.objects.get().replicationtarget_set.all()  # type: ignore
+        print("Inside ReplicatedModel.schedule_replication()")
+        # this is an "instance" database so there should only be one
+        if isinstance(self, Database) or isinstance(self, RootDatabase):
+            database = self
+        else:
+            database = self.database
+        targets = database.replicationtarget_set.all()  # type: ignore
         for target in targets:
             ReplicationLog.objects.create(payload=serialize("json", [self]), target=target)
 
@@ -64,16 +73,30 @@ class ReplicatedModel(BaseModel):
 class Database(ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-    # database = models.ForeignKey(
-    #    "Database",
-    #    on_delete=models.CASCADE,
-    #    related_name="%(app_label)s_%(class)s_database",
-    #    null=True,
-    #    blank=True,
-    # )
+    database = models.ForeignKey(
+        "RootDatabase",
+        on_delete=models.CASCADE,
+        related_name="%(app_label)s_%(class)s_root_database",
+        null=True,
+        blank=True,
+    )
 
     def __str__(self) -> str:
         return self.name
+
+
+class RootDatabase(Database):
+    root = SingletonField()
+
+    class Meta:
+        # enforce that only one root=True RootDatabase can exist per RootDatabase
+        constraints = [
+            models.UniqueConstraint(
+                fields=["root"],
+                condition=models.Q(root=True),
+                name="unique_root_database_singleton",
+            )
+        ]
 
 
 class ReplicationTarget(BaseModel):
@@ -86,6 +109,8 @@ class ReplicationTarget(BaseModel):
 
     class Meta:
         # enforce that only one primary=True ReplicationTarget can exist per Database
+        # a primary replication target represents the canonical source of truth for a database
+        # secondary replication targets serve as a fallback in case the primary target is unavailable
         constraints = [
             models.UniqueConstraint(
                 fields=["database"],
@@ -107,24 +132,20 @@ class ReplicationLog(BaseModel):
         """
         Applies the ReplicationLog for all of the enabled Replication Targets.
         """
-        print(f"Replicating {self.payload} to homeserver")
-        targets: Iterable[ReplicationTarget] = ReplicationTarget.objects.filter(enabled=True)
+        try:
+            mod = import_module(self.target.module)  # type: ignore
+        except (ModuleNotFoundError, TypeError) as err:
+            logger.error(f"Could not import module {self.target.module}: {err}")
+            return None
 
-        # FIXME: Each replicationtarget should have its own instance of the ReplicationLog object.
-        # this is so we can have per target replication tracking. Right now, if any target fails,
-        # if we call replicate on the same ReplicationLog object, it will replicate to ALL targets again,
-        # even if some of them succeeded previously (causes duplicates).
-        async for target in targets:
-            try:
-                mod = import_module(target.module)
-            except (ModuleNotFoundError, TypeError) as err:
-                logger.error(f"Could not import module {target.module}: {err}")
-                return None
-
-            try:
-                await mod.replicate(self)
-            except Exception as err:
-                logger.error(f"Error replicating object to homeserver using module {mod}: {err}")
-                return None
+        try:
+            await mod.replicate(self)
+        except Exception as err:
+            logger.error(f"Error replicating object to homeserver using module {mod}: {err}")
+            return None
 
         return await self.aupdate(deleted=True)
+
+
+class Person(ReplicatedModel):
+    name = models.CharField(max_length=255)

@@ -1,6 +1,5 @@
 import pkg_resources
-
-from homeserver.device.clicz import CLICZ
+from clicz import CLICZ
 
 
 class PluginManager:

@@ -1,6 +1,6 @@
 from sys import exit
 
-from homeserver.device.clicz import CLICZ
+from clicz import CLICZ
 
 
 def main():

@@ -7,7 +7,7 @@ class FractalDatabaseConfig(AppConfig):
     name = "fractal_database"
 
     def ready(self):
-        from fractal_database.models import ReplicationLog
+        from fractal_database.models import Database, ReplicationLog, RootDatabase
         from fractal_database.signals import schedule_replication_signal
 
         # connect signals here to avoid circular imports

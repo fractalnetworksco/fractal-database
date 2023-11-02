@@ -2,14 +2,18 @@ from django.db import models
 
 
 class SingletonField(models.BooleanField):
+    """
+    A Django model field that can only be set to True. This is useful for creating singletons,
+    ie models that should only have one instance in the database.
+    """
+
     enabled = False
 
     def __init__(self, *args, **kwargs):
         # Always set default to True
-        if kwargs["enabled"]:
-            kwargs["default"] = True
-            kwargs["unique"] = True
-            self.enabled = True
+        kwargs["default"] = True
+        kwargs["unique"] = True
+        self.enabled = True
 
         super().__init__(*args, **kwargs)
 

@@ -21,7 +21,7 @@ OWNER_ID: str = settings.OWNER_ID
 _thread_locals = threading.local()
 
 if TYPE_CHECKING:
-    from fractal_database.models import ReplicatedModel, ReplicationLog
+    from fractal_database.models import Database, ReplicatedModel, ReplicationLog
 
 
 def enter_signal_handler():
@@ -142,8 +142,59 @@ def object_post_save(
 
         logger.info(f"Outermost post save instance: {instance}")
 
+        from fractal_database.models import Database, ReplicationTarget, RootDatabase
+
+        if isinstance(instance, RootDatabase) or isinstance(instance, Database):
+            database = instance
+        else:
+            database = instance.database
+        if not database.replicationtarget_set.exists():
+            ReplicationTarget.objects.create(
+                name="dummy",
+                module="fractal_database.replication_targets.dummy",
+                database=database,
+                primary=True,
+            )
         # create replication log entry for this instance
         instance.schedule_replication()
 
     finally:
         exit_signal_handler()
+
+
+def set_object_database(
+    sender: "ReplicatedModel", instance: "ReplicatedModel", raw: bool, **kwargs
+):
+    """
+    Set the database for a user defined model
+    """
+    if raw:
+        return
+    from fractal_database.models import Database, RootDatabase
+
+    if isinstance(instance, RootDatabase):
+        try:
+            database = RootDatabase.objects.get()
+            raise Exception("Only one root database can exist in a root database")
+        except RootDatabase.DoesNotExist:
+            instance.database = instance
+            return
+
+    try:
+        root_database = RootDatabase.objects.get()
+        # if this object is a database inside a root database set the database to RootDatabase
+        instance.database = root_database
+        return
+    except RootDatabase.DoesNotExist:
+        # in an instance database
+        # get the sole Database and set it as the database for this object
+        if isinstance(instance, Database):
+            try:
+                database = Database.objects.get()
+                raise Exception("Only one database can exist in an instance database")
+            except Database.DoesNotExist:
+                return
+
+        # set the database to the sole Database on the user defined model
+        database = Database.objects.get()
+        instance.database = database
