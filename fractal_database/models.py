@@ -181,6 +181,7 @@ class ReplicationLog(BaseModel):
         """
         Applies the ReplicationLog for all of the enabled Replication Targets.
         """
+        print(f"Replicating to target: {target}")
         try:
             mod = import_module(target.module)  # type: ignore
         except (ModuleNotFoundError, TypeError) as err:

@@ -62,7 +62,8 @@ def schedule_replication_signal(
             return schedule_replication_signal(sender, instance, created, raw, **kwargs)
 
     try:
-        transaction.on_commit(lambda: async_to_sync(instance.replicate)(instance.target))
+        target = instance.target
+        transaction.on_commit(lambda: async_to_sync(instance.replicate)(target))
     except Exception as e:
         logger.error(f"Could not apply replication log: {e}")
 
