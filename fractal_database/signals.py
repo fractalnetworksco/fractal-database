@@ -148,6 +148,7 @@ def object_post_save(
             database = instance
         else:
             database = instance.database
+        # create a dummy replication target if none exists so we can replicate when a real target is added
         if not database.replicationtarget_set.exists():
             ReplicationTarget.objects.create(
                 name="dummy",

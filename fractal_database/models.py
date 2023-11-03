@@ -43,9 +43,14 @@ class ReplicatedModel(BaseModel):
     # for example, a model that replicated to a MatrixReplicationTarget will store its associated
     # Matrix room_id in this property
     repr_metadata = models.JSONField(default=dict)
+    # all replicated models belong to a database
+    # this property determines where the model is replicated to
     database = models.ForeignKey(
-        "Database", on_delete=models.CASCADE, related_name="%(app_label)s_%(class)s_database"
+        "fractal_database.Database",
+        on_delete=models.CASCADE,
+        related_name="%(app_label)s_%(class)s_database",
     )
+    models = []
 
     class Meta:
         abstract = True
@@ -53,10 +58,18 @@ class ReplicatedModel(BaseModel):
     @classmethod
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
+        ReplicatedModel.models.append(cls)
+
+    @classmethod
+    def connect_signals(cls, **kwargs):
         from fractal_database.signals import object_post_save, set_object_database
 
-        models.signals.pre_save.connect(set_object_database, sender=cls)
-        models.signals.post_save.connect(object_post_save, sender=cls)
+        for model_class in cls.models:
+            print('Registering replication signals for model "{}"'.format(model_class.__name__))
+            # pre save signal to automatically set the database property on all ReplicatedModels
+            models.signals.pre_save.connect(set_object_database, sender=model_class)
+            # post save that schedules replication
+            models.signals.post_save.connect(object_post_save, sender=model_class)
 
     def schedule_replication(self):
         print("Inside ReplicatedModel.schedule_replication()")
@@ -65,6 +78,7 @@ class ReplicatedModel(BaseModel):
             database = self
         else:
             database = self.database
+        # TODO replication targets can implement their own serialization strategy
         targets = database.replicationtarget_set.all()  # type: ignore
         for target in targets:
             ReplicationLog.objects.create(payload=serialize("json", [self]), target=target)
@@ -74,7 +88,7 @@ class Database(ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     database = models.ForeignKey(
-        "RootDatabase",
+        "fractal_database.RootDatabase",
         on_delete=models.CASCADE,
         related_name="%(app_label)s_%(class)s_root_database",
         null=True,
@@ -145,7 +159,3 @@ class ReplicationLog(BaseModel):
             return None
 
         return await self.aupdate(deleted=True)
-
-
-class Person(ReplicatedModel):
-    name = models.CharField(max_length=255)
