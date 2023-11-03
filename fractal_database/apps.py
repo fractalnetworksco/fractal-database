@@ -9,7 +9,10 @@ class FractalDatabaseConfig(AppConfig):
 
     def ready(self):
         from fractal_database.models import ReplicatedModel, ReplicationLog
-        from fractal_database.signals import schedule_replication_signal
+        from fractal_database.signals import (
+            create_project_database,
+            schedule_replication_signal,
+        )
 
         #   Assert that fractal_database is last in INSTALLED_APPS
         self._assert_installation_order()
@@ -19,6 +22,9 @@ class FractalDatabaseConfig(AppConfig):
 
         # register replication signals for all models that subclass ReplicatedModel
         ReplicatedModel.connect_signals()
+
+        # create the instance database for the project
+        models.signals.post_migrate.connect(create_project_database)
 
     @staticmethod
     def _assert_installation_order():

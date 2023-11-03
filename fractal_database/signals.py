@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 from typing import TYPE_CHECKING
 
@@ -12,11 +13,6 @@ from django.db.models.signals import m2m_changed, post_save
 from django.dispatch import receiver
 
 logger = logging.getLogger("django")
-
-HOMESERVER_URL: str = settings.HOMESERVER_URL
-ACCESS_TOKEN: str = settings.ACCESS_TOKEN
-OWNER_ID: str = settings.OWNER_ID
-
 
 _thread_locals = threading.local()
 
@@ -199,3 +195,13 @@ def set_object_database(
         # set the database to the sole Database on the user defined model
         database = Database.objects.get()
         instance.database = database
+
+
+def create_project_database(*args, **kwargs):
+    """
+    post_migrate signal to create the default instance Database based on the name of the project
+    """
+    from fractal_database.models import Database
+
+    project_name = os.path.basename(settings.BASE_DIR)
+    Database.objects.get_or_create(name=project_name, defaults={"name": project_name})
