@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+from functools import partial
 from typing import TYPE_CHECKING
 
 from asgiref.sync import async_to_sync
@@ -63,7 +64,8 @@ def schedule_replication_signal(
 
     try:
         target = instance.target
-        transaction.on_commit(lambda: async_to_sync(instance.replicate)(target))
+        repl_func = partial(instance.replicate, target)
+        transaction.on_commit(async_to_sync(repl_func))
     except Exception as e:
         logger.error(f"Could not apply replication log: {e}")
 
