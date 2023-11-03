@@ -150,7 +150,7 @@ def object_post_save(
                 name="dummy",
                 module="fractal_database.replication_targets.dummy",
                 database=database,
-                primary=True,
+                primary=False,
             )
         # create replication log entry for this instance
         instance.schedule_replication()
@@ -167,6 +167,7 @@ def set_object_database(
     """
     if raw:
         return
+
     from fractal_database.models import Database, RootDatabase
 
     if isinstance(instance, RootDatabase):
@@ -197,7 +198,7 @@ def set_object_database(
         instance.database = database
 
 
-def create_project_database(*args, **kwargs):
+def create_project_database(*args, **kwargs) -> None:
     """
     post_migrate signal to create the default instance Database based on the name of the project
     """
@@ -205,3 +206,21 @@ def create_project_database(*args, **kwargs):
 
     project_name = os.path.basename(settings.BASE_DIR)
     Database.objects.get_or_create(name=project_name, defaults={"name": project_name})
+
+
+def create_matrix_replication_target(*args, **kwargs) -> None:
+    """ """
+    from fractal_database.models import Database, ReplicationTarget
+
+    project_name = os.path.basename(settings.BASE_DIR)
+    module_path = "fractal_database_matrix"
+    database = Database.objects.get(name=project_name)
+    ReplicationTarget.objects.get_or_create(
+        name="matrix",
+        defaults={
+            "name": "matrix",
+            "module": module_path,
+            "primary": True,
+            "database": database,
+        },
+    )

@@ -119,6 +119,7 @@ class ReplicationTarget(BaseModel):
     module = models.CharField(max_length=255)
     enabled = models.BooleanField(default=True)
     database = models.ForeignKey(Database, on_delete=models.CASCADE)
+    # replication events are only consumed from the primary target for a database
     primary = models.BooleanField(default=False)
 
     class Meta:

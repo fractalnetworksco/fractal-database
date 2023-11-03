@@ -10,6 +10,7 @@ class FractalDatabaseConfig(AppConfig):
     def ready(self):
         from fractal_database.models import ReplicatedModel, ReplicationLog
         from fractal_database.signals import (
+            create_matrix_replication_target,
             create_project_database,
             schedule_replication_signal,
         )
@@ -25,6 +26,9 @@ class FractalDatabaseConfig(AppConfig):
 
         # create the instance database for the project
         models.signals.post_migrate.connect(create_project_database)
+
+        # create the matrix replication target for the project database
+        models.signals.post_migrate.connect(create_matrix_replication_target)
 
     @staticmethod
     def _assert_installation_order():
