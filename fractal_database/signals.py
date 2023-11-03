@@ -62,7 +62,7 @@ def schedule_replication_signal(
             return schedule_replication_signal(sender, instance, created, raw, **kwargs)
 
     try:
-        transaction.on_commit(lambda: async_to_sync(instance.replicate)())
+        transaction.on_commit(lambda: async_to_sync(instance.replicate)(instance.target))
     except Exception as e:
         logger.error(f"Could not apply replication log: {e}")
 
@@ -107,6 +107,16 @@ def schedule_replication_signal(
 #         pass
 
 #     return None
+
+
+def launch_replication_agent(
+    sender: "Database", instance: "Database", created: bool, raw: bool, **kwargs
+) -> None:
+    if instance.database:
+        # check which type of replication agent to launch
+        target = instance.database.replicationtarget_set.filter(primary=True)[0]
+        target.module.launch()
+        print(f"Launching replication agent for {instance.database} using {target.module}")
 
 
 def object_post_save(
@@ -224,3 +234,4 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
             "database": database,
         },
     )
+    database.schedule_replication()

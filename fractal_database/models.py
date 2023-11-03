@@ -3,11 +3,12 @@ from importlib import import_module
 from typing import Iterable
 from uuid import uuid4
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.serializers import serialize
 from django.db import models
+from fractal_database_matrix.representations import Space
 
 from .fields import SingletonField
 
@@ -42,7 +43,7 @@ class ReplicatedModel(BaseModel):
     # Stores a map of representation data associated with each of the model's replication targets
     # for example, a model that replicated to a MatrixReplicationTarget will store its associated
     # Matrix room_id in this property
-    repr_metadata = models.JSONField(default=dict)
+    repr = GenericRelation("fractal_database.ReplicatedModelRepresentation")
     # all replicated models belong to a database
     # this property determines where the model is replicated to
     database = models.ForeignKey(
@@ -50,6 +51,7 @@ class ReplicatedModel(BaseModel):
         on_delete=models.CASCADE,
         related_name="%(app_label)s_%(class)s_database",
     )
+
     models = []
 
     class Meta:
@@ -81,10 +83,28 @@ class ReplicatedModel(BaseModel):
         # TODO replication targets can implement their own serialization strategy
         targets = database.replicationtarget_set.all()  # type: ignore
         for target in targets:
-            ReplicationLog.objects.create(payload=serialize("json", [self]), target=target)
+            repl_log = ReplicationLog.objects.create(
+                payload=serialize("json", [self]),
+                target=target,
+                instance=self,
+            )
+            async_to_sync(self.create_representation)(repl_log)
 
 
-class Database(ReplicatedModel):
+class ReplicatedModelRepresentation(BaseModel):
+    metadata = models.JSONField(default=dict)
+    target = models.ForeignKey("fractal_database.ReplicationTarget", on_delete=models.CASCADE)
+    model = GenericForeignKey()
+    object_id = models.CharField(max_length=255)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, blank=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["content_type", "object_id"]),
+        ]
+
+
+class Database(ReplicatedModel, Space):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     database = models.ForeignKey(
@@ -142,21 +162,40 @@ class ReplicationLog(BaseModel):
     payload = models.JSONField()
     object_version = models.PositiveIntegerField(default=0)
     target = models.ForeignKey(ReplicationTarget, on_delete=models.CASCADE)
+    instance = GenericForeignKey()
+    object_id = models.CharField(max_length=255)
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name="%(app_label)s_%(class)s_content_type",
+    )
 
-    async def replicate(self):
+    class Meta:
+        indexes = [
+            models.Index(fields=["content_type", "object_id"]),
+        ]
+
+    async def replicate(self, target):
         """
         Applies the ReplicationLog for all of the enabled Replication Targets.
         """
         try:
-            mod = import_module(self.target.module)  # type: ignore
+            mod = import_module(target.module)  # type: ignore
         except (ModuleNotFoundError, TypeError) as err:
             logger.error(f"Could not import module {self.target.module}: {err}")
             return None
 
-        try:
-            await mod.replicate(self)
-        except Exception as err:
-            logger.error(f"Error replicating object to homeserver using module {mod}: {err}")
-            return None
+        # try:
+        await mod.replicate(self)
+        # except Exception as err:
+        #     logger.error(f"Error replicating object to homeserver using module {mod}: {err}")
+        #     return None
 
         return await self.aupdate(deleted=True)
+
+
+class RepresentationLog(BaseModel):
+    method = models.CharField(max_length=255)
+    replication_log = models.ForeignKey(ReplicationLog, on_delete=models.CASCADE)
