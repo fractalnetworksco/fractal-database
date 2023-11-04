@@ -200,6 +200,9 @@ def set_object_database(
         if isinstance(instance, Database):
             try:
                 database = Database.objects.get()
+                # return if current instance is the sole existing database
+                if database == instance:
+                    return
                 raise Exception("Only one database can exist in an instance database")
             except Database.DoesNotExist:
                 return

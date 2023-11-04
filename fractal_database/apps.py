@@ -36,7 +36,5 @@ class FractalDatabaseConfig(AppConfig):
             assert settings.INSTALLED_APPS[-1] == "fractal_database"
         except AssertionError as e:
             raise AssertionError(
-                """Fractal Database requires the 'fractal_database' Django app to be positioned as the final entry in your Django's
- project 'INSTALLED_APPS' in settings.py. This ensures 'fractal_database' is loaded last, allowing it to properly capture and replicate
- database changes. Please adjust the order in 'INSTALLED_APPS' to place 'fractal_database' at the end."""
+                """'fractal_database' must be the last entry in INSTALLED_APPS. Please move 'fractal_database' to the end of INSTALLED_APPS in your project's settings.py."""
             ) from e
