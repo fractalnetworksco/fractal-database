@@ -12,8 +12,8 @@ class Representation:
     async def _create_representation(self):
         raise NotImplementedError
 
-    async def create_representation(self, replication_log):
+    def create_or_update_representation(self, target, instance):
         for subclass in self.get_subclasses():
             if subclass == self.__class__:
                 print(f"Creating representation for {subclass}")
-                return await self._create_representation(replication_log)
+                return self._create_or_update_representation(target, instance)
