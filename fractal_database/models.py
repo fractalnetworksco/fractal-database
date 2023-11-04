@@ -85,10 +85,12 @@ class ReplicatedModel(BaseModel):
             database = self
         else:
             database = self.database
-        # TODO replication targets can implement their own serialization strategy
+        # TODO replication targets to implement their own serialization strategy
         targets = database.replicationtarget_set.all()  # type: ignore
         for target in targets:
-            repr_log = self.create_or_update_representation(target, self)
+            repr_log = None
+            if target.has_repr:
+                repr_log = self.create_or_update_representation(target)
             ReplicationLog.objects.create(
                 payload=serialize("json", [self]),
                 target=target,
@@ -148,6 +150,8 @@ class ReplicationTarget(BaseModel):
     database = models.ForeignKey(Database, on_delete=models.CASCADE)
     # replication events are only consumed from the primary target for a database
     primary = models.BooleanField(default=False)
+    # does this target provide a remote representation
+    has_repr = models.BooleanField(default=False)
 
     class Meta:
         # enforce that only one primary=True ReplicationTarget can exist per Database

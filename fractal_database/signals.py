@@ -236,6 +236,7 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
             "module": module_path,
             "primary": True,
             "database": database,
+            "has_repr": True,
         },
     )
     database.schedule_replication()
