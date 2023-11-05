@@ -8,6 +8,10 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.core.serializers import serialize
 from django.db import models
+from fractal_database.signals import (
+    clear_deferred_replications,
+    get_deferred_replications,
+)
 from fractal_database_matrix.representations import Space
 
 from .fields import SingletonField
@@ -59,7 +63,7 @@ class ReplicatedModel(BaseModel):
     class Meta:
         abstract = True
 
-    def create_or_update_representation(self, target, instance):
+    def create_or_update_representation(self, target):
         pass
 
     @classmethod
@@ -89,8 +93,13 @@ class ReplicatedModel(BaseModel):
         targets = database.replicationtarget_set.all()  # type: ignore
         for target in targets:
             repr_log = None
+            # TODO target.has_repr should be a method
+            # that takes the instance (self) as an argument
+            # to determine if we need to create a representation
+            # for the object
             if target.has_repr:
                 repr_log = self.create_or_update_representation(target)
+            print(f"Creating replication log for target {target}")
             ReplicationLog.objects.create(
                 payload=serialize("json", [self]),
                 target=target,
@@ -195,16 +204,18 @@ class ReplicationLog(BaseModel):
         """
         Applies the ReplicationLog for all of the enabled Replication Targets.
         """
-        print(f"Replicating to target: {self.target}")
+        print("Running deferred replication for {}".format(self))
         try:
             mod = import_module(self.target.module)  # type: ignore
         except (ModuleNotFoundError, TypeError) as err:
             logger.error(f"Could not import module {self.target.module}: {err}")
             return None
-
+        # get any deferred replications from the current thread so we can pass them
+        # to the async replication function
+        defered_replications = get_deferred_replications()
         # we pass the instance and target properties of self explicitly to avoid async_to_sync issues
         # caused by Django's lazy evaluation of model properties
-        async_to_sync(mod.replicate)(self, self.instance, self.target)
+        async_to_sync(mod.replicate)(self, self.instance, self.target, defered_replications)
         # except Exception as err:
         #     logger.error(f"Error replicating object to homeserver using module {mod}: {err}")
         #     return None

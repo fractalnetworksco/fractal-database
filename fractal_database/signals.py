@@ -38,6 +38,31 @@ def in_nested_signal_handler():
     return getattr(_thread_locals, "signal_nesting_count", 0) > 1
 
 
+def defer_replication(repl_log: "ReplicationLog"):
+    print(f"Deferring replication of {repl_log}")
+    if not hasattr(_thread_locals, "defered_replications"):
+        _thread_locals.defered_replications = {repl_log.target.name: [repl_log]}
+        # the first time we defer a replication, register a on_commit handler
+        # probably a more sensible way to do this
+        print(f"Registering on_commit handler for {repl_log.target}")
+        if repl_log.target.name not in _thread_locals.defered_replications:
+            transaction.on_commit(repl_log.replicate)
+    else:
+        print(f"Registering on_commit handler for {repl_log.target}")
+        if repl_log.target.name not in _thread_locals.defered_replications:
+            transaction.on_commit(repl_log.replicate)
+        _thread_locals.defered_replications.setdefault(repl_log.target.name, []).append(repl_log)
+
+
+def get_deferred_replications():
+    return getattr(_thread_locals, "defered_replications")
+
+
+def clear_deferred_replications():
+    print("Clearing deferred replications")
+    del _thread_locals.defered_replications
+
+
 @transaction.atomic
 def increment_version(sender, instance, **kwargs) -> None:
     """
@@ -48,7 +73,6 @@ def increment_version(sender, instance, **kwargs) -> None:
     # owner = apps.get_model("core", "MatrixAccount").objects.get(matrix_id=OWNER_ID)
     # TODO set last updated by when updating
     instance.update(object_version=F("object_version") + 1)
-    return None
 
 
 def schedule_replication_signal(
@@ -62,10 +86,10 @@ def schedule_replication_signal(
         with transaction.atomic():
             return schedule_replication_signal(sender, instance, created, raw, **kwargs)
 
-    try:
-        transaction.on_commit(instance.replicate)
-    except Exception as e:
-        logger.error(f"Could not apply replication log: {e}")
+    # try:
+    defer_replication(instance)
+    # except Exception as e:
+    #    logger.error(f"Could not apply replication log: {e}")
 
 
 # @receiver(post_save, sender=RepresentationLog)
@@ -164,6 +188,7 @@ def object_post_save(
                 primary=False,
             )
         # create replication log entry for this instance
+        print(f"calling schedule replication on {instance}")
         instance.schedule_replication()
 
     finally:
