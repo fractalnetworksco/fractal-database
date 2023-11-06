@@ -12,9 +12,10 @@ from fractal_database.signals import (
     clear_deferred_replications,
     get_deferred_replications,
 )
-from fractal_database_matrix.representations import Space
+from fractal_database_matrix.representations import MatrixSpace
 
 from .fields import SingletonField
+from .representations import Representation
 
 logger = logging.getLogger("django")
 
@@ -64,7 +65,7 @@ class ReplicatedModel(BaseModel):
         abstract = True
 
     def create_or_update_representation(self, target):
-        pass
+        Representation.create_or_update_representation(self, target)
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
@@ -91,14 +92,10 @@ class ReplicatedModel(BaseModel):
             database = self.database
         # TODO replication targets to implement their own serialization strategy
         targets = database.replicationtarget_set.all()  # type: ignore
-        for target in targets:
-            repr_log = None
-            # TODO target.has_repr should be a method
-            # that takes the instance (self) as an argument
-            # to determine if we need to create a representation
-            # for the object
-            if target.has_repr:
-                repr_log = self.create_or_update_representation(target)
+        for parent_target in targets:
+            target = parent_target.target
+            # pass this replicated model instance to the target's replication method
+            repr_log = target.create_or_update_representation(self)
             print(f"Creating replication log for target {target}")
             ReplicationLog.objects.create(
                 payload=serialize("json", [self]),
@@ -122,7 +119,7 @@ class ReplicatedModelRepresentation(BaseModel):
     )
 
 
-class Database(Space, ReplicatedModel):
+class Database(ReplicatedModel, MatrixSpace):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     database = models.ForeignKey(
@@ -152,15 +149,15 @@ class RootDatabase(Database):
 
 
 class ReplicationTarget(BaseModel):
-    name = models.CharField(max_length=255)
-    # python module path that implements the ReplicationTarget
-    module = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, unique=True)
     enabled = models.BooleanField(default=True)
     database = models.ForeignKey(Database, on_delete=models.CASCADE)
     # replication events are only consumed from the primary target for a database
     primary = models.BooleanField(default=False)
-    # does this target provide a remote representation
-    has_repr = models.BooleanField(default=False)
+    # This field will store the content type of the subclass
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    # This is the generic foreign key to the subclass
+    content_object = GenericForeignKey("content_type", "uuid")
 
     class Meta:
         # enforce that only one primary=True ReplicationTarget can exist per Database
@@ -174,8 +171,27 @@ class ReplicationTarget(BaseModel):
             )
         ]
 
+    def save(self, *args, **kwargs):
+        if not self.pk:  # If this is a new object (no primary key yet)
+            # Set the content_type to the current model
+            self.content_type = ContentType.objects.get_for_model(self.__class__)
+        super().save(*args, **kwargs)
+
+    @property
+    def target(self):
+        if self.content_type and hasattr(self, self.content_type.model):
+            # We can now safely get the child object by using the content_type field
+            return getattr(self, self.content_type.model)
+        return None
+
+    def create_or_update_representation(self, instance):
+        pass
+
+    async def replicate(self, log, instance, defered_replications, *args, **kwargs):
+        print("pizza")
+
     def __str__(self) -> str:
-        return f"{self.name} ({self.module})"
+        return f"{self.name}"
 
 
 class ReplicationLog(BaseModel):
@@ -205,17 +221,13 @@ class ReplicationLog(BaseModel):
         Applies the ReplicationLog for all of the enabled Replication Targets.
         """
         print("Running deferred replication for {}".format(self))
-        try:
-            mod = import_module(self.target.module)  # type: ignore
-        except (ModuleNotFoundError, TypeError) as err:
-            logger.error(f"Could not import module {self.target.module}: {err}")
-            return None
-        # get any deferred replications from the current thread so we can pass them
-        # to the async replication function
         defered_replications = get_deferred_replications()
         # we pass the instance and target properties of self explicitly to avoid async_to_sync issues
         # caused by Django's lazy evaluation of model properties
-        async_to_sync(mod.replicate)(self, self.instance, self.target, defered_replications)
+        async_to_sync(self.target.replicate)(
+            self.instance, self.target, defered_replications[self.target.name]
+        )
+        clear_deferred_replications(self.target.name)
         # except Exception as err:
         #     logger.error(f"Error replicating object to homeserver using module {mod}: {err}")
         #     return None
@@ -234,3 +246,7 @@ class RepresentationLog(BaseModel):
         null=True,
         related_name="%(app_label)s_%(class)s_content_type",
     )
+
+
+class DummyReplicationTarget(ReplicationTarget):
+    pass

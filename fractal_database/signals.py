@@ -41,26 +41,20 @@ def in_nested_signal_handler():
 def defer_replication(repl_log: "ReplicationLog"):
     print(f"Deferring replication of {repl_log}")
     if not hasattr(_thread_locals, "defered_replications"):
-        _thread_locals.defered_replications = {repl_log.target.name: [repl_log]}
-        # the first time we defer a replication, register a on_commit handler
-        # probably a more sensible way to do this
-        print(f"Registering on_commit handler for {repl_log.target}")
-        if repl_log.target.name not in _thread_locals.defered_replications:
-            transaction.on_commit(repl_log.replicate)
-    else:
-        print(f"Registering on_commit handler for {repl_log.target}")
-        if repl_log.target.name not in _thread_locals.defered_replications:
-            transaction.on_commit(repl_log.replicate)
-        _thread_locals.defered_replications.setdefault(repl_log.target.name, []).append(repl_log)
+        _thread_locals.defered_replications = {}
+    # only register an on_commit replicate once per target
+    if repl_log.target.name not in _thread_locals.defered_replications:
+        transaction.on_commit(repl_log.replicate)
+    _thread_locals.defered_replications.setdefault(repl_log.target.name, []).append(repl_log)
 
 
 def get_deferred_replications():
     return getattr(_thread_locals, "defered_replications")
 
 
-def clear_deferred_replications():
+def clear_deferred_replications(target: str):
     print("Clearing deferred replications")
-    del _thread_locals.defered_replications
+    del _thread_locals.defered_replications[target]
 
 
 @transaction.atomic
@@ -173,7 +167,11 @@ def object_post_save(
 
         logger.info(f"Outermost post save instance: {instance}")
 
-        from fractal_database.models import Database, ReplicationTarget, RootDatabase
+        from fractal_database.models import (
+            Database,
+            DummyReplicationTarget,
+            RootDatabase,
+        )
 
         if isinstance(instance, RootDatabase) or isinstance(instance, Database):
             database = instance
@@ -181,9 +179,8 @@ def object_post_save(
             database = instance.database
         # create a dummy replication target if none exists so we can replicate when a real target is added
         if not database.replicationtarget_set.exists():
-            ReplicationTarget.objects.create(
+            DummyReplicationTarget.objects.create(
                 name="dummy",
-                module="fractal_database.replication_targets.dummy",
                 database=database,
                 primary=False,
             )
@@ -249,19 +246,18 @@ def create_project_database(*args, **kwargs) -> None:
 
 def create_matrix_replication_target(*args, **kwargs) -> None:
     """ """
-    from fractal_database.models import Database, ReplicationTarget
+    from fractal_database.models import Database
+    from fractal_database_matrix.models import MatrixReplicationTarget
 
     project_name = os.path.basename(settings.BASE_DIR)
     module_path = "fractal_database_matrix"
     database = Database.objects.get(name=project_name)
-    ReplicationTarget.objects.get_or_create(
+    MatrixReplicationTarget.objects.get_or_create(
         name="matrix",
         defaults={
             "name": "matrix",
-            "module": module_path,
             "primary": True,
             "database": database,
-            "has_repr": True,
         },
     )
     database.schedule_replication()
