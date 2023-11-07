@@ -1,19 +1,27 @@
-class Representation:
-    _subclasses = []
+from typing import TYPE_CHECKING
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._subclasses.append(cls)
+if TYPE_CHECKING:
+    from fractal_database.models import ReplicatedModel, ReplicationTarget
+
+
+class Representation:
+    module = __name__
+    repr_method = None
+
+    def get_repr_types(self):
+        return [
+            base for base in self.__class__.__bases__ if base.__module__.startswith(self.module)
+        ]
 
     @classmethod
-    def get_subclasses(cls):
-        return cls._subclasses
+    def create_representation_logs(cls, instance: "ReplicatedModel", target: "ReplicationTarget"):
+        """
+        Create the representation logs (tasks) for creating a Matrix space
+        """
+        from fractal_database.models import RepresentationLog
 
-    async def _create_representation(self):
-        raise NotImplementedError
-
-    def create_or_update_representation(self, target):
-        for subclass in self.get_subclasses():
-            if subclass == self.__class__:
-                print(f"Creating representation for {subclass}")
-                return self._create_or_update_representation(target)
+        return [
+            RepresentationLog.objects.create(
+                instance=instance, method=cls.repr_method, target=target
+            )
+        ]

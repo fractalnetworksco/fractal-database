@@ -12,14 +12,13 @@ class FractalDatabaseConfig(AppConfig):
         from fractal_database.signals import (
             create_matrix_replication_target,
             create_project_database,
-            schedule_replication_signal,
         )
 
         #   Assert that fractal_database is last in INSTALLED_APPS
         self._assert_installation_order()
 
         # register ReplicationLog signals here to avoid circular imports
-        models.signals.post_save.connect(schedule_replication_signal, sender=ReplicationLog)
+        # models.signals.post_save.connect(schedule_replication_signal, sender=ReplicationLog)
 
         # register replication signals for all models that subclass ReplicatedModel
         ReplicatedModel.connect_signals()

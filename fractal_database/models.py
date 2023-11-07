@@ -7,7 +7,7 @@ from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.serializers import serialize
-from django.db import models
+from django.db import models, transaction
 from fractal_database.signals import (
     clear_deferred_replications,
     get_deferred_replications,
@@ -16,6 +16,7 @@ from fractal_database_matrix.representations import MatrixSpace
 
 from .fields import SingletonField
 from .representations import Representation
+from .signals import defer_replication
 
 logger = logging.getLogger("django")
 
@@ -60,6 +61,7 @@ class ReplicatedModel(BaseModel):
 
     # track subclasses
     models = []
+    repr_models = []
 
     class Meta:
         abstract = True
@@ -69,9 +71,6 @@ class ReplicatedModel(BaseModel):
         super().__init_subclass__(**kwargs)
         # keep track of subclasses so we can register signals for them in App.ready
         ReplicatedModel.models.append(cls)
-
-    def create_representation_logs(self, target):
-        pass
 
     @classmethod
     def connect_signals(cls, **kwargs):
@@ -85,6 +84,10 @@ class ReplicatedModel(BaseModel):
             models.signals.post_save.connect(object_post_save, sender=model_class)
 
     def schedule_replication(self, created=False):
+        # must be in a txn for defer_replication to work properly
+        if not transaction.get_connection().in_atomic_block:
+            with transaction.atomic():
+                return self.schedule_replication(created=created)
         print("Inside ReplicatedModel.schedule_replication()")
         if isinstance(self, Database) or isinstance(self, RootDatabase):
             database = self
@@ -92,22 +95,26 @@ class ReplicatedModel(BaseModel):
             database = self.database
         # TODO replication targets to implement their own serialization strategy
         targets = database.replicationtarget_set.all()  # type: ignore
-        repr_log = None
+        repr_logs = None
         for parent_target in targets:
             target = parent_target.target
             # pass this replicated model instance to the target's replication method
             if created:
-                repr_log = self.create_representation_logs(self)
+                repr_logs = target.create_representation_logs(self)
             else:
                 # reper_log = target.create_update_representation_logs(self)
                 print("Not creating repr for object: ", self)
             print(f"Creating replication log for target {target}")
-            ReplicationLog.objects.create(
+            repl_log = ReplicationLog.objects.create(
                 payload=serialize("json", [self]),
                 target=target,
                 instance=self,
-                repr_log=repr_log,
             )
+            print("Adding repr logs to repl log")
+            # dummy targets return none
+            if repr_logs:
+                repl_log.repr_logs.add(*repr_logs)
+            defer_replication(repl_log)
 
 
 class ReplicatedModelRepresentation(BaseModel):
@@ -124,7 +131,7 @@ class ReplicatedModelRepresentation(BaseModel):
     )
 
 
-class Database(MatrixSpace, ReplicatedModel):
+class Database(ReplicatedModel, MatrixSpace):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     database = models.ForeignKey(
@@ -176,6 +183,23 @@ class ReplicationTarget(BaseModel):
             )
         ]
 
+    def create_representation_logs(self, instance):
+        """
+        Create the representation logs (tasks) for creating a Matrix space
+        """
+        from fractal_database.models import RepresentationLog
+
+        if not hasattr(self, "get_repr_types"):
+            return []
+
+        repr_logs = []
+        repr_types = instance.get_repr_types()
+        for repr_type in repr_types:
+            print(f"Creating repr {repr_types} logs for instance {instance} on target {self}")
+            repr_logs.append(*repr_type.create_representation_logs(instance, self))
+
+        return repr_logs
+
     def save(self, *args, **kwargs):
         if not self.pk:  # If this is a new object (no primary key yet)
             # Set the content_type to the current model
@@ -188,9 +212,6 @@ class ReplicationTarget(BaseModel):
             # We can now safely get the child object by using the content_type field
             return getattr(self, self.content_type.model)
         return None
-
-    def create_representation_logs(self, instance):
-        raise NotImplementedError()
 
     async def replicate(self, log, instance, deferred_replications, *args, **kwargs):
         raise NotImplementedError()
@@ -212,9 +233,7 @@ class ReplicationLog(BaseModel):
         null=True,
         related_name="%(app_label)s_%(class)s_content_type",
     )
-    repr_log = models.ForeignKey(
-        "fractal_database.RepresentationLog", on_delete=models.CASCADE, blank=True, null=True
-    )
+    repr_logs = models.ManyToManyField("fractal_database.RepresentationLog")
 
     class Meta:
         indexes = [
@@ -241,6 +260,7 @@ class ReplicationLog(BaseModel):
 
 
 class RepresentationLog(BaseModel):
+    target = models.ForeignKey(ReplicationTarget, on_delete=models.CASCADE)
     method = models.CharField(max_length=255)
     instance = GenericForeignKey()
     object_id = models.CharField(max_length=255)
@@ -255,4 +275,7 @@ class RepresentationLog(BaseModel):
 
 class DummyReplicationTarget(ReplicationTarget):
     async def replicate(*args, **kwargs):
+        pass
+
+    def create_representation_logs(self, instance):
         pass

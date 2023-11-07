@@ -44,6 +44,7 @@ def defer_replication(repl_log: "ReplicationLog"):
         _thread_locals.defered_replications = {}
     # only register an on_commit replicate once per target
     if repl_log.target.name not in _thread_locals.defered_replications:
+        logger.info(f"Registering on_commit for {repl_log.target.name}")
         transaction.on_commit(repl_log.replicate)
     _thread_locals.defered_replications.setdefault(repl_log.target.name, []).append(repl_log)
 
@@ -69,21 +70,21 @@ def increment_version(sender, instance, **kwargs) -> None:
     instance.update(object_version=F("object_version") + 1)
 
 
-def schedule_replication_signal(
-    sender: "ReplicationLog", instance: "ReplicationLog", created: bool, raw: bool, **kwargs
-) -> None:
-    if raw:
-        logger.info(f"Loading instance from fixture: {instance}")
-        return None
+# def schedule_replication_signal(
+#     sender: "ReplicationLog", instance: "ReplicationLog", created: bool, raw: bool, **kwargs
+# ) -> None:
+#     if raw:
+#         logger.info(f"Loading instance from fixture: {instance}")
+#         return None
 
-    if not transaction.get_connection().in_atomic_block:
-        with transaction.atomic():
-            return schedule_replication_signal(sender, instance, created, raw, **kwargs)
+#     if not transaction.get_connection().in_atomic_block:
+#         with transaction.atomic():
+#             return schedule_replication_signal(sender, instance, created, raw, **kwargs)
 
-    # try:
-    defer_replication(instance)
-    # except Exception as e:
-    #    logger.error(f"Could not apply replication log: {e}")
+#     # try:
+#     defer_replication(instance)
+# except Exception as e:
+#    logger.error(f"Could not apply replication log: {e}")
 
 
 # @receiver(post_save, sender=RepresentationLog)
@@ -261,7 +262,7 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
 
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
 
-    target = MatrixReplicationTarget.objects.get_or_create(
+    target, created = MatrixReplicationTarget.objects.get_or_create(
         name="matrix",
         defaults={
             "name": "matrix",
@@ -276,4 +277,4 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
     logger.info("Replicating %s to %s" % (database, target))
     # call schedule_replication with created True so the representation will
     # be created on the Matrix homeserver
-    database.schedule_replication(created=True)
+    database.schedule_replication(created=created)
