@@ -163,6 +163,7 @@ def object_post_save(
 
     try:
         if in_nested_signal_handler():
+            logger.info(f"Back inside post_save for instance: {instance}")
             return None
 
         logger.info(f"Outermost post save instance: {instance}")
@@ -186,7 +187,7 @@ def object_post_save(
             )
         # create replication log entry for this instance
         print(f"calling schedule replication on {instance}")
-        instance.schedule_replication()
+        instance.schedule_replication(created=created)
 
     finally:
         exit_signal_handler()
@@ -236,28 +237,43 @@ def set_object_database(
 
 def create_project_database(*args, **kwargs) -> None:
     """
-    post_migrate signal to create the default instance Database based on the name of the project
+    Runs on post_migrate signal to create the Fractal Database for the Django project
     """
     from fractal_database.models import Database
 
     project_name = os.path.basename(settings.BASE_DIR)
+    logger.info('Creating Fractal Database for Django project "%s"' % project_name)
     Database.objects.get_or_create(name=project_name, defaults={"name": project_name})
 
 
 def create_matrix_replication_target(*args, **kwargs) -> None:
-    """ """
+    """
+    Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
+    """
     from fractal_database.models import Database
     from fractal_database_matrix.models import MatrixReplicationTarget
 
+    # make sure the appropriate matrix env vars are set
+    homeserver_url = os.environ["HS_MATRIX_URL"]
+    access_token = os.environ["HS_ACCESS_TOKEN"]
     project_name = os.path.basename(settings.BASE_DIR)
-    module_path = "fractal_database_matrix"
     database = Database.objects.get(name=project_name)
-    MatrixReplicationTarget.objects.get_or_create(
+
+    logger.info("Creating MatrixReplicationTarget for database %s" % database)
+
+    target = MatrixReplicationTarget.objects.get_or_create(
         name="matrix",
         defaults={
             "name": "matrix",
             "primary": True,
             "database": database,
+            "homeserver": homeserver_url,
+            "access_token": access_token,
         },
     )
-    database.schedule_replication()
+
+    # replicate the database to the new created MatrixReplicationTarget
+    logger.info("Replicating %s to %s" % (database, target))
+    # call schedule_replication with created True so the representation will
+    # be created on the Matrix homeserver
+    database.schedule_replication(created=True)

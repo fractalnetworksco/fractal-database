@@ -64,14 +64,14 @@ class ReplicatedModel(BaseModel):
     class Meta:
         abstract = True
 
-    def create_or_update_representation(self, target):
-        Representation.create_or_update_representation(self, target)
-
     @classmethod
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         # keep track of subclasses so we can register signals for them in App.ready
         ReplicatedModel.models.append(cls)
+
+    def create_representation_logs(self, target):
+        pass
 
     @classmethod
     def connect_signals(cls, **kwargs):
@@ -84,7 +84,7 @@ class ReplicatedModel(BaseModel):
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
 
-    def schedule_replication(self):
+    def schedule_replication(self, created=False):
         print("Inside ReplicatedModel.schedule_replication()")
         if isinstance(self, Database) or isinstance(self, RootDatabase):
             database = self
@@ -92,10 +92,15 @@ class ReplicatedModel(BaseModel):
             database = self.database
         # TODO replication targets to implement their own serialization strategy
         targets = database.replicationtarget_set.all()  # type: ignore
+        repr_log = None
         for parent_target in targets:
             target = parent_target.target
             # pass this replicated model instance to the target's replication method
-            repr_log = target.create_or_update_representation(self)
+            if created:
+                repr_log = self.create_representation_logs(self)
+            else:
+                # reper_log = target.create_update_representation_logs(self)
+                print("Not creating repr for object: ", self)
             print(f"Creating replication log for target {target}")
             ReplicationLog.objects.create(
                 payload=serialize("json", [self]),
@@ -119,7 +124,7 @@ class ReplicatedModelRepresentation(BaseModel):
     )
 
 
-class Database(ReplicatedModel, MatrixSpace):
+class Database(MatrixSpace, ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     database = models.ForeignKey(
@@ -184,11 +189,11 @@ class ReplicationTarget(BaseModel):
             return getattr(self, self.content_type.model)
         return None
 
-    def create_or_update_representation(self, instance):
-        pass
+    def create_representation_logs(self, instance):
+        raise NotImplementedError()
 
-    async def replicate(self, log, instance, defered_replications, *args, **kwargs):
-        print("pizza")
+    async def replicate(self, log, instance, deferred_replications, *args, **kwargs):
+        raise NotImplementedError()
 
     def __str__(self) -> str:
         return f"{self.name}"
@@ -221,11 +226,11 @@ class ReplicationLog(BaseModel):
         Applies the ReplicationLog for all of the enabled Replication Targets.
         """
         print("Running deferred replication for {}".format(self))
-        defered_replications = get_deferred_replications()
+        deferred_replications = get_deferred_replications()
         # we pass the instance and target properties of self explicitly to avoid async_to_sync issues
         # caused by Django's lazy evaluation of model properties
         async_to_sync(self.target.replicate)(
-            self.instance, self.target, defered_replications[self.target.name]
+            self, self.instance, deferred_replications[self.target.name]
         )
         clear_deferred_replications(self.target.name)
         # except Exception as err:
@@ -249,4 +254,5 @@ class RepresentationLog(BaseModel):
 
 
 class DummyReplicationTarget(ReplicationTarget):
-    pass
+    async def replicate(*args, **kwargs):
+        pass
