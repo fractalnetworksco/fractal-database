@@ -2,7 +2,7 @@ import logging
 import os
 import threading
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from asgiref.sync import async_to_sync
 from django.apps import apps
@@ -39,6 +39,9 @@ def in_nested_signal_handler():
 
 
 def defer_replication(repl_log: "ReplicationLog"):
+    if not transaction.get_connection().in_atomic_block:
+        raise Exception("Replication can only be deferred inside an atomic block")
+
     print(f"Deferring replication of {repl_log}")
     if not hasattr(_thread_locals, "defered_replications"):
         _thread_locals.defered_replications = {}
@@ -50,7 +53,7 @@ def defer_replication(repl_log: "ReplicationLog"):
 
 
 def get_deferred_replications():
-    return getattr(_thread_locals, "defered_replications")
+    return getattr(_thread_locals, "defered_replications", {})
 
 
 def clear_deferred_replications(target: str):

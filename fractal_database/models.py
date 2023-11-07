@@ -83,16 +83,18 @@ class ReplicatedModel(BaseModel):
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
 
-    def schedule_replication(self, created=False):
+    def schedule_replication(self, created: bool = False):
         # must be in a txn for defer_replication to work properly
         if not transaction.get_connection().in_atomic_block:
             with transaction.atomic():
                 return self.schedule_replication(created=created)
+
         print("Inside ReplicatedModel.schedule_replication()")
         if isinstance(self, Database) or isinstance(self, RootDatabase):
             database = self
         else:
             database = self.database
+
         # TODO replication targets to implement their own serialization strategy
         targets = database.replicationtarget_set.all()  # type: ignore
         repr_logs = None
@@ -100,19 +102,22 @@ class ReplicatedModel(BaseModel):
             target = parent_target.target
             # pass this replicated model instance to the target's replication method
             if created:
+                # FIXME: this method name is really confusing
                 repr_logs = target.create_representation_logs(self)
             else:
                 # reper_log = target.create_update_representation_logs(self)
                 print("Not creating repr for object: ", self)
+
             print(f"Creating replication log for target {target}")
             repl_log = ReplicationLog.objects.create(
                 payload=serialize("json", [self]),
                 target=target,
                 instance=self,
             )
-            print("Adding repr logs to repl log")
+
             # dummy targets return none
             if repr_logs:
+                print("Adding repr logs to repl log")
                 repl_log.repr_logs.add(*repr_logs)
             defer_replication(repl_log)
 
@@ -189,7 +194,7 @@ class ReplicationTarget(BaseModel):
         """
         from fractal_database.models import RepresentationLog
 
-        if not hasattr(self, "get_repr_types"):
+        if not hasattr(instance, "get_repr_types"):
             return []
 
         repr_logs = []
@@ -252,9 +257,6 @@ class ReplicationLog(BaseModel):
             self, self.instance, deferred_replications[self.target.name]
         )
         clear_deferred_replications(self.target.name)
-        # except Exception as err:
-        #     logger.error(f"Error replicating object to homeserver using module {mod}: {err}")
-        #     return None
 
         return self.update(deleted=True)
 
