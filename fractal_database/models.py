@@ -1,12 +1,13 @@
 import logging
 from importlib import import_module
-from typing import Iterable
+from typing import Any, Callable, Dict, Iterable
 from uuid import uuid4
 
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.serializers import serialize
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from fractal_database.signals import (
     clear_deferred_replications,
@@ -192,8 +193,6 @@ class ReplicationTarget(BaseModel):
         """
         Create the representation logs (tasks) for creating a Matrix space
         """
-        from fractal_database.models import RepresentationLog
-
         if not hasattr(instance, "get_repr_types"):
             return []
 
@@ -201,7 +200,10 @@ class ReplicationTarget(BaseModel):
         repr_types = instance.get_repr_types()
         for repr_type in repr_types:
             print(f"Creating repr {repr_types} logs for instance {instance} on target {self}")
-            repr_logs.append(*repr_type.create_representation_logs(instance, self))
+            metadata_props = repr_type.get_repr_metadata_properties()
+            repr_logs.append(
+                *repr_type.create_representation_logs(instance, self, metadata_props)
+            )
 
         return repr_logs
 
@@ -273,6 +275,23 @@ class RepresentationLog(BaseModel):
         null=True,
         related_name="%(app_label)s_%(class)s_content_type",
     )
+    metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
+
+    def _import_method(self, method: str) -> Callable:
+        """
+        Imports and returns the provided method.
+        """
+        repr_class, repr_method = method.split(":")
+        repr_module, repr_class = repr_class.rsplit(".", 1)
+        repr_module = import_module(repr_module)
+        repr_class = getattr(repr_module, repr_class)
+        return getattr(repr_class, repr_method)
+
+    async def apply(self, target):
+        repr_method = self._import_method(self.method)
+        print("Calling ReplicationLog's repr_log method: ", repr_method)
+        await repr_method(self, target)
+        await self.aupdate(deleted=True)
 
 
 class DummyReplicationTarget(ReplicationTarget):

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Set
 
 if TYPE_CHECKING:
     from fractal_database.models import ReplicatedModel, ReplicationTarget
@@ -14,14 +14,18 @@ class Representation:
         ]
 
     @classmethod
-    def create_representation_logs(cls, instance: "ReplicatedModel", target: "ReplicationTarget"):
+    def create_representation_logs(
+        cls, instance: "ReplicatedModel", target: "ReplicationTarget", metadata_props: Set[str]
+    ):
         """
         Create the representation logs (tasks) for creating a Matrix space
         """
         from fractal_database.models import RepresentationLog
 
+        metadata = {prop: getattr(instance, prop) for prop in metadata_props}
+
         return [
             RepresentationLog.objects.create(
-                instance=instance, method=cls.repr_method, target=target
+                instance=instance, method=cls.repr_method, target=target, metadata=metadata
             )
         ]
