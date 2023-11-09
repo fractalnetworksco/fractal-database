@@ -59,7 +59,7 @@ class ReplicatedModel(BaseModel):
         on_delete=models.CASCADE,
         related_name="%(app_label)s_%(class)s_database",
     )
-    repr_set = GenericRelation("fractal_database.ReplicatedModelRepresentation")
+    repr = GenericRelation("fractal_database.ReplicatedModelRepresentation")
 
     # track subclasses
     models = []
@@ -138,6 +138,11 @@ class ReplicatedModelRepresentation(BaseModel):
         null=True,
         related_name="%(app_label)s_%(class)s_content_type",
     )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["content_type", "object_id"]),
+        ]
 
 
 class Database(ReplicatedModel, MatrixSpace):
