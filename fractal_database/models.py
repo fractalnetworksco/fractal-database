@@ -1,6 +1,6 @@
 import logging
 from importlib import import_module
-from typing import Any, Callable, Dict, Iterable
+from typing import Any, Callable, List
 from uuid import uuid4
 
 from asgiref.sync import async_to_sync, sync_to_async
@@ -9,6 +9,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.serializers import serialize
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
+from django.db.models.manager import BaseManager
 from fractal_database.signals import (
     clear_deferred_replications,
     get_deferred_replications,
@@ -111,16 +112,18 @@ class ReplicatedModel(BaseModel):
 
             print(f"Creating replication log for target {target}")
             repl_log = ReplicationLog.objects.create(
-                payload=serialize("json", [self]),
+                payload=serialize("python", [self]),
                 target=target,
                 instance=self,
+                txn_id=transaction.savepoint().split("_")[0],
             )
 
             # dummy targets return none
             if repr_logs:
                 print("Adding repr logs to repl log")
                 repl_log.repr_logs.add(*repr_logs)
-            defer_replication(repl_log)
+
+            defer_replication(target)
 
 
 class ReplicatedModelRepresentation(BaseModel):
@@ -163,6 +166,28 @@ class RootDatabase(Database):
                 condition=models.Q(root=True),
                 name="unique_root_database_singleton",
             )
+        ]
+
+
+class ReplicationLog(BaseModel):
+    payload = models.JSONField(encoder=DjangoJSONEncoder)
+    object_version = models.PositiveIntegerField(default=0)
+    target = models.ForeignKey("fractal_database.ReplicationTarget", on_delete=models.CASCADE)
+    instance = GenericForeignKey()
+    object_id = models.CharField(max_length=255)
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name="%(app_label)s_%(class)s_content_type",
+    )
+    repr_logs = models.ManyToManyField("fractal_database.RepresentationLog")
+    txn_id = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["content_type", "object_id"]),
         ]
 
 
@@ -213,6 +238,19 @@ class ReplicationTarget(BaseModel):
             self.content_type = ContentType.objects.get_for_model(self.__class__)
         super().save(*args, **kwargs)
 
+    async def get_repl_logs_by_txn(self) -> List[BaseManager[ReplicationLog]]:
+        txn_ids = (
+            ReplicationLog.objects.filter(target=self, deleted=False)
+            .values_list("txn_id", flat=True)
+            .distinct()
+        )
+        return [
+            ReplicationLog.objects.filter(txn_id=txn_id, deleted=False, target=self).order_by(
+                "date_created"
+            )
+            async for txn_id in txn_ids
+        ]
+
     @property
     def target(self):
         if self.content_type and hasattr(self, self.content_type.model):
@@ -225,42 +263,6 @@ class ReplicationTarget(BaseModel):
 
     def __str__(self) -> str:
         return f"{self.name}"
-
-
-class ReplicationLog(BaseModel):
-    payload = models.JSONField()
-    object_version = models.PositiveIntegerField(default=0)
-    target = models.ForeignKey(ReplicationTarget, on_delete=models.CASCADE)
-    instance = GenericForeignKey()
-    object_id = models.CharField(max_length=255)
-    content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.CASCADE,
-        blank=True,
-        null=True,
-        related_name="%(app_label)s_%(class)s_content_type",
-    )
-    repr_logs = models.ManyToManyField("fractal_database.RepresentationLog")
-
-    class Meta:
-        indexes = [
-            models.Index(fields=["content_type", "object_id"]),
-        ]
-
-    def replicate(self):
-        """
-        Applies the ReplicationLog for all of the enabled Replication Targets.
-        """
-        print("Running deferred replication for {}".format(self))
-        deferred_replications = get_deferred_replications()
-        # we pass the instance and target properties of self explicitly to avoid async_to_sync issues
-        # caused by Django's lazy evaluation of model properties
-        async_to_sync(self.target.replicate)(
-            self, self.instance, deferred_replications[self.target.name]
-        )
-        clear_deferred_replications(self.target.name)
-
-        return self.update(deleted=True)
 
 
 class RepresentationLog(BaseModel):

@@ -1,24 +1,19 @@
 import logging
 import os
 import threading
-from functools import partial
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 from asgiref.sync import async_to_sync
-from django.apps import apps
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
-from django.db.models.manager import BaseManager
-from django.db.models.signals import m2m_changed, post_save
-from django.dispatch import receiver
 
 logger = logging.getLogger("django")
 
 _thread_locals = threading.local()
 
 if TYPE_CHECKING:
-    from fractal_database.models import Database, ReplicatedModel, ReplicationLog
+    from fractal_database.models import Database, ReplicatedModel, ReplicationTarget
 
 
 def enter_signal_handler():
@@ -38,18 +33,18 @@ def in_nested_signal_handler():
     return getattr(_thread_locals, "signal_nesting_count", 0) > 1
 
 
-def defer_replication(repl_log: "ReplicationLog"):
+def defer_replication(target: "ReplicationTarget"):
     if not transaction.get_connection().in_atomic_block:
         raise Exception("Replication can only be deferred inside an atomic block")
 
-    print(f"Deferring replication of {repl_log}")
+    print(f"Deferring replication of {target}")
     if not hasattr(_thread_locals, "defered_replications"):
         _thread_locals.defered_replications = {}
     # only register an on_commit replicate once per target
-    if repl_log.target.name not in _thread_locals.defered_replications:
-        logger.info(f"Registering on_commit for {repl_log.target.name}")
-        transaction.on_commit(repl_log.replicate)
-    _thread_locals.defered_replications.setdefault(repl_log.target.name, []).append(repl_log)
+    if target.name not in _thread_locals.defered_replications:
+        logger.info(f"Registering on_commit for {target.name}")
+        transaction.on_commit(async_to_sync(target.replicate))
+    _thread_locals.defered_replications.setdefault(target.name, []).append(target)
 
 
 def get_deferred_replications():
@@ -71,65 +66,6 @@ def increment_version(sender, instance, **kwargs) -> None:
     # owner = apps.get_model("core", "MatrixAccount").objects.get(matrix_id=OWNER_ID)
     # TODO set last updated by when updating
     instance.update(object_version=F("object_version") + 1)
-
-
-# def schedule_replication_signal(
-#     sender: "ReplicationLog", instance: "ReplicationLog", created: bool, raw: bool, **kwargs
-# ) -> None:
-#     if raw:
-#         logger.info(f"Loading instance from fixture: {instance}")
-#         return None
-
-#     if not transaction.get_connection().in_atomic_block:
-#         with transaction.atomic():
-#             return schedule_replication_signal(sender, instance, created, raw, **kwargs)
-
-#     # try:
-#     defer_replication(instance)
-# except Exception as e:
-#    logger.error(f"Could not apply replication log: {e}")
-
-
-# @receiver(post_save, sender=RepresentationLog)
-# def apply_representation_signal(
-#     sender: RepresentationLog, instance: RepresentationLog, created: bool, raw: bool, **kwargs
-# ) -> None:
-#     if raw:
-#         logger.info(f"Loading instance from fixture: {instance}")
-#         return None
-
-#     try:
-#         instance.apply_representation()
-#     except Exception as e:
-#         logger.error(f"Could not apply representation log: {e}")
-
-
-# @receiver(m2m_changed, sender=ReplicatedModel)
-# def update_m2m(sender, instance, action: str, **kwargs) -> None:
-#     root_space_model = apps.get_model("core", "RootSpace")
-#     if action == "post_add":
-#         logger.info(f"Update m2m sender: {sender}")
-#         logger.info(f"Update m2m instance: {instance}")
-#         logger.info(f"Update m2m action: {action}")
-#         logger.info(f"Update m2m kwargs: {kwargs}")
-
-#         if kwargs["reverse"]:
-#             pass
-#         else:
-#             for object_uuid in kwargs["pk_set"]:
-#                 obj: "Space" = instance.spaces.get(uuid=object_uuid)
-#                 RepresentationLog.objects.create(
-#                     payload=obj.to_dict(),
-#                     ref=instance,
-#                     action="add_to_space",
-#                     object_version=obj.object_version,
-#                 )
-#             instance.schedule_replication()
-
-#     elif action == "post_delete":
-#         pass
-
-#     return None
 
 
 def launch_replication_agent(
