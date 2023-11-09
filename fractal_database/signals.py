@@ -33,6 +33,13 @@ def in_nested_signal_handler():
     return getattr(_thread_locals, "signal_nesting_count", 0) > 1
 
 
+def commit(target):
+    # this runs its own thread so once this completes, we need to clear the deferred replications
+    # for this target
+    async_to_sync(target.replicate)()
+    clear_deferred_replications(target.name)
+
+
 def defer_replication(target: "ReplicationTarget"):
     if not transaction.get_connection().in_atomic_block:
         raise Exception("Replication can only be deferred inside an atomic block")
@@ -43,7 +50,7 @@ def defer_replication(target: "ReplicationTarget"):
     # only register an on_commit replicate once per target
     if target.name not in _thread_locals.defered_replications:
         logger.info(f"Registering on_commit for {target.name}")
-        transaction.on_commit(async_to_sync(target.replicate))
+        transaction.on_commit(lambda: commit(target))
     _thread_locals.defered_replications.setdefault(target.name, []).append(target)
 
 
