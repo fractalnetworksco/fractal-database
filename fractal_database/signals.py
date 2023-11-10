@@ -59,20 +59,20 @@ def get_deferred_replications():
 
 
 def clear_deferred_replications(target: str):
-    print("Clearing deferred replications")
+    print("Clearing deferred replications for target %s" % target)
     del _thread_locals.defered_replications[target]
 
 
-@transaction.atomic
 def increment_version(sender, instance, **kwargs) -> None:
     """
     Increments the object version and updates the last_updated_by field to the
     configured owner in settings.py
+
     """
-    instance = sender.objects.select_for_update().get(uuid=instance.uuid)
-    # owner = apps.get_model("core", "MatrixAccount").objects.get(matrix_id=OWNER_ID)
+    # instance = sender.objects.select_for_update().get(uuid=instance.uuid)
     # TODO set last updated by when updating
     instance.update(object_version=F("object_version") + 1)
+    instance.refresh_from_db()
 
 
 def launch_replication_agent(

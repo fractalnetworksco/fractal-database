@@ -6,10 +6,12 @@ from uuid import uuid4
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.serializers import serialize
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.manager import BaseManager
+from fractal_database.exceptions import StaleObjectException
 from fractal_database.signals import (
     clear_deferred_replications,
     get_deferred_replications,
@@ -67,6 +69,19 @@ class ReplicatedModel(BaseModel):
 
     class Meta:
         abstract = True
+
+    def save(self, *args, **kwargs):
+        """
+        Gaurds on the object version to ensure that the object version is incremented monotonically
+        """
+        with transaction.atomic():
+            try:
+                current = type(self).objects.select_for_update().get(pk=self.pk)
+                if self.object_version + 1 <= current.object_version:
+                    raise StaleObjectException()
+            except ObjectDoesNotExist:
+                pass
+            super().save(*args, **kwargs)  # Call the "real" save() method.
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
