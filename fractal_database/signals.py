@@ -1,7 +1,7 @@
 import logging
 import os
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
@@ -33,18 +33,33 @@ def in_nested_signal_handler():
     return getattr(_thread_locals, "signal_nesting_count", 0) > 1
 
 
-def commit(target):
+def commit(target: "ReplicationTarget") -> None:
+    """
+    Commits a deferred replication for a ReplicationTarget, then removes
+    the ReplicationTarget from deferred replications.
+
+    Intended to be called by the transaction.on_commit handler registered
+    by defer_replication.
+    """
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
     async_to_sync(target.replicate)()
     clear_deferred_replications(target.name)
 
 
-def defer_replication(target: "ReplicationTarget"):
+def defer_replication(target: "ReplicationTarget") -> None:
+    """
+    Defers replication of a ReplicationTarget until the current transaction is committed.
+    Supports multiple ReplicationTargets per transaction. Replication will only be performed
+    once per target.
+
+    Args:
+        target (ReplicationTarget): The ReplicationTarget to defer replication.
+    """
     if not transaction.get_connection().in_atomic_block:
         raise Exception("Replication can only be deferred inside an atomic block")
 
-    print(f"Deferring replication of {target}")
+    logger.info(f"Deferring replication of {target}")
     if not hasattr(_thread_locals, "defered_replications"):
         _thread_locals.defered_replications = {}
     # only register an on_commit replicate once per target
@@ -54,12 +69,21 @@ def defer_replication(target: "ReplicationTarget"):
     _thread_locals.defered_replications.setdefault(target.name, []).append(target)
 
 
-def get_deferred_replications():
+def get_deferred_replications() -> Dict[str, List["ReplicationTarget"]]:
+    """
+    Returns a dict of ReplicationTargets that have been deferred for replication.
+    """
     return getattr(_thread_locals, "defered_replications", {})
 
 
-def clear_deferred_replications(target: str):
-    print("Clearing deferred replications for target %s" % target)
+def clear_deferred_replications(target: str) -> None:
+    """
+    Clears the deferred replications for a given target.
+
+    Args:
+        target (str): The target to clear deferred replications for.
+    """
+    logger.info("Clearing deferred replications for target %s" % target)
     del _thread_locals.defered_replications[target]
 
 
@@ -67,7 +91,6 @@ def increment_version(sender, instance, **kwargs) -> None:
     """
     Increments the object version and updates the last_updated_by field to the
     configured owner in settings.py
-
     """
     # instance = sender.objects.select_for_update().get(uuid=instance.uuid)
     # TODO set last updated by when updating
@@ -82,12 +105,15 @@ def launch_replication_agent(
         # check which type of replication agent to launch
         target = instance.database.replicationtarget_set.filter(primary=True)[0]
         target.module.launch()
-        print(f"Launching replication agent for {instance.database} using {target.module}")
+        logger.info(f"Launching replication agent for {instance.database} using {target.module}")
 
 
 def object_post_save(
     sender: "ReplicatedModel", instance: "ReplicatedModel", created: bool, raw: bool, **kwargs
 ) -> None:
+    """
+    Schedule replication for a ReplicatedModel instance
+    """
     if raw:
         logger.info(f"Loading instance from fixture: {instance}")
         return None
@@ -101,12 +127,6 @@ def object_post_save(
     enter_signal_handler()
 
     increment_version(sender, instance)
-
-    # dependencies = []
-    # if created:
-    #     dependencies = instance.create_dependencies()
-
-    # logger.info(f"{instance.name} dependencies: {dependencies}")
 
     try:
         if in_nested_signal_handler():
@@ -126,14 +146,14 @@ def object_post_save(
         else:
             database = instance.database
         # create a dummy replication target if none exists so we can replicate when a real target is added
-        if not database.replicationtarget_set.exists():
+        if not database.replicationtarget_set.exists():  # type: ignore
             DummyReplicationTarget.objects.create(
                 name="dummy",
                 database=database,
                 primary=False,
             )
         # create replication log entry for this instance
-        print(f"calling schedule replication on {instance}")
+        logger.info(f"Calling schedule replication on {instance}")
         instance.schedule_replication(created=created)
 
     finally:
@@ -142,7 +162,7 @@ def object_post_save(
 
 def set_object_database(
     sender: "ReplicatedModel", instance: "ReplicatedModel", raw: bool, **kwargs
-):
+) -> None:
     """
     Set the database for a user defined model
     """
@@ -156,7 +176,7 @@ def set_object_database(
             database = RootDatabase.objects.get()
             raise Exception("Only one root database can exist in a root database")
         except RootDatabase.DoesNotExist:
-            instance.database = instance
+            instance.database = instance  # type: ignore
             return
 
     try:

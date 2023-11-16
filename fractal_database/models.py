@@ -278,7 +278,7 @@ class ReplicationTarget(BaseModel):
             return getattr(self, self.content_type.model)
         return None
 
-    async def replicate(self, log, instance, deferred_replications, *args, **kwargs):
+    async def replicate(self):
         raise NotImplementedError()
 
     def __str__(self) -> str:
