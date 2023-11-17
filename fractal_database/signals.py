@@ -221,8 +221,8 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
     from fractal_database_matrix.models import MatrixReplicationTarget
 
     # make sure the appropriate matrix env vars are set
-    homeserver_url = os.environ["HS_MATRIX_URL"]
-    access_token = os.environ["HS_ACCESS_TOKEN"]
+    homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
+    access_token = os.environ["MATRIX_ACCESS_TOKEN"]
     project_name = os.path.basename(settings.BASE_DIR)
     database = Database.objects.get(name=project_name)
 
