@@ -8,7 +8,7 @@ class FractalDatabaseConfig(AppConfig):
     name = "fractal_database"
 
     def ready(self):
-        from fractal_database.models import ReplicatedModel, ReplicationLog
+        from fractal_database.models import ReplicatedModel
         from fractal_database.signals import (
             create_matrix_replication_target,
             create_project_database,

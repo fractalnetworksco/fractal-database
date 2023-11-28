@@ -12,14 +12,9 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.manager import BaseManager
 from fractal_database.exceptions import StaleObjectException
-from fractal_database.signals import (
-    clear_deferred_replications,
-    get_deferred_replications,
-)
 from fractal_database_matrix.representations import MatrixSpace
 
 from .fields import SingletonField
-from .representations import Representation
 from .signals import defer_replication
 
 logger = logging.getLogger("django")
