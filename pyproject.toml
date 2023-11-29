@@ -6,9 +6,10 @@ authors = ["Mo Balaa <balaa@fractalnetworks.co>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.10"
 taskiq-matrix = {git = "https://github.com/fractalnetworksco/taskiq-matrix.git"}
 fractal-cli = {git = "https://github.com/fractalnetworksco/fractal-cli.git"}
+django = "^4.2.4"
 
 
 [build-system]
@@ -26,4 +27,3 @@ fractal = "fractal_database.cli.__main__:main"
 "db" = "fractal_database.controllers.fractal_database_controller"
 "test" = "fractal_database.controllers.fractal_database_controller2"
 "login" = "fractal.controllers.login"
-
