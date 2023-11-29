@@ -9,6 +9,7 @@ readme = "README.md"
 python = "^3.10"
 taskiq-matrix = {git = "https://github.com/fractalnetworksco/taskiq-matrix.git"}
 fractal-cli = {git = "https://github.com/fractalnetworksco/fractal-cli.git"}
+fractal-database-matrix = {git = "https://github.com/fractalnetworksco/fractal-database-matrix.git"}
 django = "^4.2.4"
 
 
