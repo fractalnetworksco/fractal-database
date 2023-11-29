@@ -6,7 +6,9 @@ authors = ["Mo Balaa <balaa@fractalnetworks.co>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
+taskiq-matrix = {git = "https://github.com/fractalnetworksco/taskiq-matrix.git"}
+fractal-cli = {git = "https://github.com/fractalnetworksco/fractal-cli.git"}
 
 
 [build-system]

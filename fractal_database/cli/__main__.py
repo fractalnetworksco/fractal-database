@@ -1,6 +1,6 @@
 from sys import exit
 
-from clicz import CLICZ
+from fractal.cli import CLICZ
 
 
 def main():
