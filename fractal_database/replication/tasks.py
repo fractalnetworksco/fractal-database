@@ -1,42 +1,45 @@
 import asyncio
-import json
-import os
+import logging
 import subprocess
 import sys
-from typing import Any, Dict, List
 
-from django.conf import settings
-from fractal import FractalAsyncClient
 from fractal_database_matrix.broker import broker
 
+logger = logging.getLogger(__name__)
 
-def load_data_from_dicts(data_list: List[Dict[str, Any]]) -> None:
+
+def load_data_from_dicts(fixture: str, project_dir: str) -> None:
     """
-    Load data into Django models from a list of dictionaries. Dictionaries
-    should be in the fixture format
+    Load data into Django models from a Django fixture string.
 
     Args:
-    - data_list (list[dict]): List of dictionaries representing model instances
+    - fixture (str): A Django fixture encoded as a string.
+    - project_dir (str): The path to the project directory.
     """
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "homeserver.app.settings")
-    project_dir = settings.BASE_DIR
-    # project_root_path = os.path.dirname(project_dir)
+    logger.debug(f"Loading {fixture} into local database")
+
     cmd = [sys.executable, f"{project_dir}/manage.py", "loaddata", "--format=json", "-"]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    fixture_bytes = fixture.encode("utf-8")
 
-    objects = json.dumps(data_list).encode("utf-8")
-    stdout, stderr = proc.communicate(input=objects)
+    stdout, stderr = proc.communicate(input=fixture_bytes)
 
     if proc.returncode != 0:
-        raise Exception(f"ERROR: {proc.returncode} Failed to load data: {stderr}")
-    else:
-        print(stdout.decode("utf-8"))
+        raise Exception(f"ERROR {proc.returncode}: Failed to load data: {stderr}")
+
+    logger.info(stdout.decode("utf-8"))
 
     return None
 
 
 @broker.task(queue="replication")
-async def replicate_fixture(event: str, room_id: str, event_type: str):
-    print(f"Replicating {event} to room {room_id} with event type {event_type}")
+async def replicate_fixture(fixture: str, project_dir: str) -> None:
+    """
+    Replicates a given fixture into the local database.
+
+    Args:
+    - fixture (str): A Django fixture encoded as a string.
+    - project_dir (str): The path to the project directory.
+    """
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, load_data_from_dicts, json.loads(event))
+    return await loop.run_in_executor(None, load_data_from_dicts, fixture, project_dir)

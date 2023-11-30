@@ -89,7 +89,9 @@ class ReplicatedModel(BaseModel):
         from fractal_database.signals import object_post_save, set_object_database
 
         for model_class in cls.models:
-            print('Registering replication signals for model "{}"'.format(model_class.__name__))
+            logger.info(
+                'Registering replication signals for model "{}"'.format(model_class.__name__)
+            )
             # pre save signal to automatically set the database property on all ReplicatedModels
             models.signals.pre_save.connect(set_object_database, sender=model_class)
             # post save that schedules replication
