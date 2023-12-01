@@ -38,7 +38,10 @@ class Command(BaseCommand):
 
         # launch taskiq worker
         print(f"sys.executable: {sys.executable}")
-        args = [sys.executable, "-m", "taskiq"] + [
+        args = [
+            sys.executable,
+            "-m",
+            "taskiq",
             "worker",
             "--ack-type",
             "when_received",
