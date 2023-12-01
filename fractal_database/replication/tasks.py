@@ -8,7 +8,7 @@ from fractal_database_matrix.broker import broker
 logger = logging.getLogger(__name__)
 
 
-def load_data_from_dicts(fixture: str, project_dir: str) -> None:
+def load_data_from_dicts(fixture: str) -> None:
     """
     Load data into Django models from a Django fixture string.
 
@@ -16,8 +16,11 @@ def load_data_from_dicts(fixture: str, project_dir: str) -> None:
     - fixture (str): A Django fixture encoded as a string.
     - project_dir (str): The path to the project directory.
     """
+    from django.conf import settings
+
     logger.debug(f"Loading {fixture} into local database")
 
+    project_dir = settings.BASE_DIR
     cmd = [sys.executable, f"{project_dir}/manage.py", "loaddata", "--format=json", "-"]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     fixture_bytes = fixture.encode("utf-8")
@@ -33,7 +36,7 @@ def load_data_from_dicts(fixture: str, project_dir: str) -> None:
 
 
 @broker.task(queue="replication")
-async def replicate_fixture(fixture: str, project_dir: str) -> None:
+async def replicate_fixture(fixture: str) -> None:
     """
     Replicates a given fixture into the local database.
 
@@ -42,4 +45,4 @@ async def replicate_fixture(fixture: str, project_dir: str) -> None:
     - project_dir (str): The path to the project directory.
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, load_data_from_dicts, fixture, project_dir)
+    return await loop.run_in_executor(None, load_data_from_dicts, fixture)
