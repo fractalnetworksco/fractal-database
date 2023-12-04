@@ -158,6 +158,9 @@ class ReplicatedModelRepresentation(BaseModel):
 
 
 class Database(ReplicatedModel, MatrixSpace):
+    # TODO shouldn't be importing fractal_database_matrix stuff here
+    # figure out a way to register representations on remote models from
+    # fractal_database_matrix
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     database = models.ForeignKey(
@@ -172,7 +175,7 @@ class Database(ReplicatedModel, MatrixSpace):
         return self.name
 
 
-class RootDatabase(Database):
+class RootDatabase(Database, MatrixSpace):
     root = SingletonField()
 
     class Meta:
@@ -319,3 +322,13 @@ class DummyReplicationTarget(ReplicationTarget):
 
     def create_representation_logs(self, instance):
         pass
+
+
+class Snapshot(ReplicatedModel):
+    """
+    Represents a snapshot of a database at a given point in time.
+    Used to efficiently bootstrap a database on a new device.
+    """
+
+    url = models.URLField()
+    sync_token = models.CharField(max_length=255)
