@@ -1,4 +1,4 @@
-from clicz import cli_method
+from fractal.cli import cli_method
 
 
 class FractalDatabaseController:

@@ -7,8 +7,8 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-fractal-cli = {git = "https://github.com/fractalnetworksco/fractal-cli.git"}
-fractal-database-matrix = {git = "https://github.com/fractalnetworksco/fractal-database-matrix.git"}
+fractal-cli = "^0.1.0"
+fractal-database-matrix = "^0.1.0"
 django = "^4.2.4"
 
 
@@ -17,13 +17,5 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 
-[tool.poetry.scripts]
-fractal = "fractal_database.cli.__main__:main"
-
-[tool.poetry.plugins."fractal_database.entrypoint"]
-"fractal_database" = "fractal_database.cli"
-
-[tool.poetry.plugins."fractal_database.plugins"]
+[tool.poetry.plugins."fractal.plugins"]
 "db" = "fractal_database.controllers.fractal_database_controller"
-"test" = "fractal_database.controllers.fractal_database_controller2"
-"login" = "fractal.controllers.login"
