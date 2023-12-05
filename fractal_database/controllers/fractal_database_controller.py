@@ -2,8 +2,7 @@ import asyncio
 
 from fractal.cli import cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController
-from fractal.cli.utils import parse_matrix_id
-from fractal.matrix import MatrixClient
+from fractal.matrix import MatrixClient, parse_matrix_id
 
 
 class FractalDatabaseController(AuthenticatedController):
