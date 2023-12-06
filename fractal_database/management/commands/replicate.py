@@ -37,7 +37,6 @@ class Command(BaseCommand):
         process_env["DJANGO_SETTINGS_MODULE"] = str(settings_module)
 
         # launch taskiq worker
-        print(f"sys.executable: {sys.executable}")
         args = [
             sys.executable,
             "-m",
