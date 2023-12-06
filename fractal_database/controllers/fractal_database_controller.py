@@ -1,12 +1,20 @@
 import asyncio
+import json
 import os
 import subprocess
+import tomllib
+from io import BytesIO
 from sys import exit
 
+import docker
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from fractal.cli import cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController
+from fractal.cli.utils import data_dir
 from fractal.matrix import MatrixClient, parse_matrix_id
+
+GIT_ORG_PATH = "https://github.com/fractalnetworksco"
 
 
 class FractalDatabaseController(AuthenticatedController):
@@ -66,6 +74,26 @@ class FractalDatabaseController(AuthenticatedController):
         print(f"Successfully joined {room_id}")
 
     @cli_method
+    def init(self):
+        """
+        Starts a new Fractal Database project for this machine.
+        Located in ~/.local/share/fractal/rootdb
+        ---
+
+        """
+        os.chdir(data_dir)
+        try:
+            call_command("startproject", "rootdb")
+        except CommandError:
+            print("You have already initialized Fractal Database on your machine.")
+            exit(1)
+
+        # add fractal_database to INSTALLED_APPS
+        to_write = "INSTALLED_APPS += ['fractal_database']\n"
+        with open("rootdb/rootdb/settings.py", "a") as f:
+            f.write(to_write)
+
+    @cli_method
     def startapp(self, db_name: str):
         """
         Create a database Python module (Django app). Equivalent to `django-admin startapp`.
@@ -86,6 +114,7 @@ class FractalDatabaseController(AuthenticatedController):
         os.chdir(db_name)
         call_command("startapp", db_name)
         subprocess.run(["poetry", "init", "-n", f"--name={db_name}"])
+        subprocess.run(["poetry", "add", "django", "fractal-database"])
 
         # poetry init puts a readme key in the toml, so
         # create a readme so that the app is installable
@@ -94,16 +123,126 @@ class FractalDatabaseController(AuthenticatedController):
 
         print("Done.")
 
+    def _verify_repos_cloned(self):
+        """
+        Verifies that all Fractal Database projects are cloned into the user data directory.
+        """
+        projects = [
+            "fractal-database-matrix",
+            "fractal-database",
+            "taskiq-matrix",
+            "fractal-matrix-client",
+        ]
+        for project in projects:
+            if not os.path.exists(os.path.join(data_dir, project)):
+                print(f"Failed to find {project} in {data_dir}.")
+                print("Run `fractal db clone` to clone all Fractal Database projects.")
+                return False
+        return True
+
     @cli_method
-    def deploy(self, db_name: str):
+    def clone(self):
+        """
+        Clones all Fractal Database projects into the user data directory.
+
+        ---
+        Args:
+
+        """
+        subprocess.run(
+            ["git", "clone", f"{GIT_ORG_PATH}/fractal-database-matrix.git"], cwd=data_dir
+        )
+        subprocess.run(["git", "clone", f"{GIT_ORG_PATH}/fractal-database.git"], cwd=data_dir)
+        subprocess.run(["git", "clone", f"{GIT_ORG_PATH}/taskiq-matrix.git"], cwd=data_dir)
+        subprocess.run(
+            ["git", "clone", f"{GIT_ORG_PATH}/fractal-matrix-client.git"], cwd=data_dir
+        )
+
+    @cli_method
+    def build(self, image_tag: str, verbose: bool = False):
+        """
+        Builds a given database into a Docker container.
+
+        ---
+        Args:
+            image_tag: The tag to give the Docker image.
+            verbose: Whether or not to print verbose output.
+        """
+        import docker.api.build
+
+        docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
+
+        try:
+            assert self._verify_repos_cloned()
+        except AssertionError:
+            exit(1)
+
+        dockerfile = """
+FROM python:3.11.4
+RUN mkdir /code
+COPY . /code
+RUN pip install /code
+"""
+        client = docker.from_env()
+
+        print(f"Building Docker image {image_tag}...")
+        response = client.api.build(
+            path=".",
+            dockerfile=dockerfile,
+            rm=True,
+            tag=image_tag,
+            quiet=False,
+            decode=True,
+            nocache=True,
+        )
+        if verbose:
+            for line in response:
+                if "stream" in line:
+                    print(line["stream"], end="")
+
+    @cli_method
+    def deploy(self, verbose: bool = False):
         """
         Builds a given database into a Docker container and exports it as a tarball, and
         uploads it to the Fractal Matrix server.
+
+        Must be in the directory where pyproject.toml is located.
         ---
         Args:
-            db_name: The name of the database to export.
+            verbose: Whether or not to print verbose output.
 
         """
+        path = "."
+        # load pyproject.toml to get project name
+        try:
+            with open(f"{path}/pyproject.toml") as f:
+                pyproject = f.read()
+        except FileNotFoundError:
+            path = os.getcwd()
+            print(f"Failed to find pyproject.toml in {path}")
+            print("You must be in the directory where pyproject.toml is located.")
+            exit(1)
+
+        try:
+            name = tomllib.loads(pyproject)["tool"]["poetry"]["name"]
+        except Exception as e:
+            print(f"Failed to load pyproject.toml: {e}")
+            exit(1)
+
+        image_tag = f"{name}:fractal-database"
+        self.build(image_tag, verbose=verbose)
+
+        path = os.getcwd()
+        print(f"\nExtracting image as tarball in {path}")
+        try:
+            subprocess.run(["docker", "save", "-o", f"{name}.tar", image_tag])
+        except Exception as e:
+            print(f"Failed to extract image: {e}")
+            exit(1)
+
+        # TODO: Push to Matrix Room
+
+        print("Done.")
 
 
 Controller = FractalDatabaseController
