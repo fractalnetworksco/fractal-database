@@ -1,5 +1,6 @@
 import asyncio
 
+from django.core.management import call_command
 from fractal.cli import cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController
 from fractal.matrix import MatrixClient, parse_matrix_id
@@ -27,18 +28,9 @@ class FractalDatabaseController(AuthenticatedController):
             await client.join_room(room_id)
 
     @cli_method
-    def run(self):
-        """
-        Hello World
-        ---
-        Args:
-
-        """
-        print("hello world")
-
-    @cli_method
     def invite(self, user_id: str, room_id: str, admin: bool = False):
         """
+        Invite a Matrix user to a database.
         ---
         Args:
             user_id: The user ID to invite to the room.
@@ -59,7 +51,7 @@ class FractalDatabaseController(AuthenticatedController):
     @cli_method
     def join(self, room_id: str):
         """
-        Hello World
+        Accept an invitation to a database or knock if not invited yet.
         ---
         Args:
             room_id: The room ID to join.
@@ -69,6 +61,19 @@ class FractalDatabaseController(AuthenticatedController):
         # handle knocking on the room
         asyncio.run(self._join_room(room_id))
         print(f"Successfully joined {room_id}")
+
+    @cli_method
+    def startapp(self, db_name: str):
+        """
+        Create a database Python module (Django app). Equivalent to `django-admin startapp`.
+        ---
+        Args:
+            db_name: The name of the database to start.
+
+        """
+        print("Creating Fractal Database Django app...")
+        call_command("startapp", db_name)
+        print("Done.")
 
 
 Controller = FractalDatabaseController
