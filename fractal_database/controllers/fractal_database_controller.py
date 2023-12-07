@@ -2,11 +2,12 @@ import asyncio
 import json
 import os
 import subprocess
-import tomllib
 from io import BytesIO
 from sys import exit
 
 import docker
+import docker.api.build
+import toml
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from fractal.cli import cli_method
@@ -15,6 +16,8 @@ from fractal.cli.utils import data_dir
 from fractal.matrix import MatrixClient, parse_matrix_id
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
+DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
+FRACTAL_BASE_IMAGE = "fractalnetworksco/base:base"
 
 
 class FractalDatabaseController(AuthenticatedController):
@@ -114,7 +117,19 @@ class FractalDatabaseController(AuthenticatedController):
         os.chdir(db_name)
         call_command("startapp", db_name)
         subprocess.run(["poetry", "init", "-n", f"--name={db_name}"])
-        subprocess.run(["poetry", "add", "django", "fractal-database"])
+
+        pyproject = toml.loads(open("pyproject.toml").read())
+
+        # have to add dependencies without using poetry
+        pyproject["tool"]["poetry"]["dependencies"][
+            "django"
+        ] = ">=4.0.0"  # FIXME: Hardcoded version
+        pyproject["tool"]["poetry"]["dependencies"][
+            "fractal-database"
+        ] = ">=1.0.0"  # FIXME: Hardcoded version
+
+        with open("pyproject.toml", "w") as f:
+            f.write(toml.dumps(pyproject))
 
         # poetry init puts a readme key in the toml, so
         # create a readme so that the app is installable
@@ -123,7 +138,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         print("Done.")
 
-    def _verify_repos_cloned(self):
+    def _verify_repos_cloned(self, source_dir: str = DEFAULT_FRACTAL_SRC_DIR):
         """
         Verifies that all Fractal Database projects are cloned into the user data directory.
         """
@@ -134,8 +149,8 @@ class FractalDatabaseController(AuthenticatedController):
             "fractal-matrix-client",
         ]
         for project in projects:
-            if not os.path.exists(os.path.join(data_dir, project)):
-                print(f"Failed to find {project} in {data_dir}.")
+            if not os.path.exists(os.path.join(source_dir, project)):
+                print(f"Failed to find {project} in {source_dir}.")
                 print("Run `fractal db clone` to clone all Fractal Database projects.")
                 return False
         return True
@@ -149,48 +164,65 @@ class FractalDatabaseController(AuthenticatedController):
         Args:
 
         """
-        subprocess.run(
-            ["git", "clone", f"{GIT_ORG_PATH}/fractal-database-matrix.git"], cwd=data_dir
-        )
-        subprocess.run(["git", "clone", f"{GIT_ORG_PATH}/fractal-database.git"], cwd=data_dir)
-        subprocess.run(["git", "clone", f"{GIT_ORG_PATH}/taskiq-matrix.git"], cwd=data_dir)
-        subprocess.run(
-            ["git", "clone", f"{GIT_ORG_PATH}/fractal-matrix-client.git"], cwd=data_dir
-        )
+        source_dir = os.environ.get("FRACTAL_SOURCE_DIR", str(DEFAULT_FRACTAL_SRC_DIR))
+
+        if source_dir == DEFAULT_FRACTAL_SRC_DIR:
+            os.mkdir(DEFAULT_FRACTAL_SRC_DIR)
+            source_dir = DEFAULT_FRACTAL_SRC_DIR
+
+        try:
+            subprocess.run(["git", "clone", f"{GIT_ORG_PATH}/fractal-cli.git"], cwd=source_dir)
+            subprocess.run(
+                ["git", "clone", f"{GIT_ORG_PATH}/fractal-database-matrix.git"], cwd=source_dir
+            )
+            subprocess.run(
+                ["git", "clone", f"{GIT_ORG_PATH}/fractal-database.git"], cwd=source_dir
+            )
+            subprocess.run(["git", "clone", f"{GIT_ORG_PATH}/taskiq-matrix.git"], cwd=source_dir)
+            subprocess.run(
+                ["git", "clone", f"{GIT_ORG_PATH}/fractal-matrix-client.git"], cwd=source_dir
+            )
+        except Exception as e:
+            print(f"Failed to clone Fractal Database projects: {e}")
+            return False
 
     @cli_method
-    def build(self, image_tag: str, verbose: bool = False):
+    def build_base(self, verbose: bool = False):
         """
-        Builds a given database into a Docker container.
+        Builds a base Docker image with all Fractal Database projects installed.
+        Built image is tagged as fractalnetworksco/base:base
 
         ---
         Args:
-            image_tag: The tag to give the Docker image.
             verbose: Whether or not to print verbose output.
         """
-        import docker.api.build
+        original_dir = os.getcwd()
+        if not self._verify_repos_cloned():
+            self.clone()
 
-        docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
-
-        try:
-            assert self._verify_repos_cloned()
-        except AssertionError:
-            exit(1)
+        os.chdir(os.environ.get("FRACTAL_SOURCE_DIR", str(DEFAULT_FRACTAL_SRC_DIR)))
 
         dockerfile = """
 FROM python:3.11.4
-RUN mkdir /code
-COPY . /code
-RUN pip install /code
+RUN mkdir /fractal
+COPY . /fractal
+RUN pip install /fractal/fractal-cli/
+RUN pip install /fractal/fractal-matrix-client/
+RUN pip install /fractal/taskiq-matrix/
+RUN pip install /fractal/fractal-database-matrix/
+RUN pip install /fractal/fractal-database/
 """
         client = docker.from_env()
 
-        print(f"Building Docker image {image_tag}...")
+        # FIXME: Have to monkey patch in order to build from in-memory Dockerfiles correctly
+        docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
+
+        print(f"Building Docker image {FRACTAL_BASE_IMAGE}...")
         response = client.api.build(
             path=".",
             dockerfile=dockerfile,
-            rm=True,
-            tag=image_tag,
+            forcerm=True,
+            tag=FRACTAL_BASE_IMAGE,
             quiet=False,
             decode=True,
             nocache=True,
@@ -199,6 +231,9 @@ RUN pip install /code
             for line in response:
                 if "stream" in line:
                     print(line["stream"], end="")
+
+        os.chdir(original_dir)
+        print(f"Successfully built Docker image {FRACTAL_BASE_IMAGE}.")
 
     @cli_method
     def deploy(self, verbose: bool = False):
@@ -224,13 +259,43 @@ RUN pip install /code
             exit(1)
 
         try:
-            name = tomllib.loads(pyproject)["tool"]["poetry"]["name"]
+            name = toml.loads(pyproject)["tool"]["poetry"]["name"]
         except Exception as e:
             print(f"Failed to load pyproject.toml: {e}")
             exit(1)
 
         image_tag = f"{name}:fractal-database"
-        self.build(image_tag, verbose=verbose)
+
+        client = docker.from_env()
+
+        # ensure base image is built
+        if client.images.list(name=FRACTAL_BASE_IMAGE) == []:
+            self.build_base(verbose=verbose)
+
+        dockerfile = f"""
+FROM {FRACTAL_BASE_IMAGE}
+RUN mkdir /code
+COPY . /code
+RUN pip install /code
+"""
+        # FIXME: Have to monkey patch in order to build from in-memory Dockerfiles correctly
+        docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
+
+        print(f"Building Docker image {image_tag}...")
+        response = client.api.build(
+            path=".",
+            dockerfile=dockerfile,
+            forcerm=True,
+            tag=image_tag,
+            quiet=False,
+            decode=True,
+            nocache=True,
+        )
+        if verbose:
+            for line in response:
+                if "stream" in line:
+                    print(line["stream"], end="")
+        # self.build(image_tag, verbose=verbose)
 
         path = os.getcwd()
         print(f"\nExtracting image as tarball in {path}")
