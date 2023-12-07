@@ -1,10 +1,9 @@
 import asyncio
-import json
+import importlib
 import os
 import subprocess
-from io import BytesIO
 from sys import exit
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import docker
 import docker.api.build
@@ -78,24 +77,43 @@ class FractalDatabaseController(AuthenticatedController):
         print(f"Successfully joined {room_id}")
 
     @cli_method
-    def init(self):
+    def init(self, app: Optional[str] = None):
         """
         Starts a new Fractal Database project for this machine.
         Located in ~/.local/share/fractal/rootdb
         ---
+        Args:
+            app: The name of the database to start. If not provided, a root database is started.
 
         """
+        if app:
+            try:
+                importlib.import_module(app)
+            except ModuleNotFoundError:
+                print(f"Failed to find app {app}. Is it installed?")
+                exit(1)
+
         os.chdir(data_dir)
         try:
-            call_command("startproject", "rootdb")
+            if app:
+                call_command("startproject", "appdb")
+            else:
+                call_command("startproject", "rootdb")
         except CommandError:
             print("You have already initialized Fractal Database on your machine.")
             exit(1)
 
         # add fractal_database to INSTALLED_APPS
-        to_write = "INSTALLED_APPS += ['fractal_database']\n"
-        with open("rootdb/rootdb/settings.py", "a") as f:
+        if app:
+            to_write = f"INSTALLED_APPS += ['{app}', 'fractal_database']\n"
+        else:
+            to_write = "INSTALLED_APPS += ['fractal_database']\n"
+
+        file_path = "appdb/appdb/settings.py" if app else "rootdb/rootdb/settings.py"
+        with open(file_path, "a") as f:
             f.write(to_write)
+
+        print(f"Successfully initialized Fractal Database project {data_dir}/{app or 'rootdb'}")
 
     @cli_method
     def startapp(self, db_name: str):
