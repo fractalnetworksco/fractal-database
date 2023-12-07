@@ -11,7 +11,7 @@ import toml
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from fractal.cli import cli_method
-from fractal.cli.controllers.authenticated import AuthenticatedController
+from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
 from fractal.cli.utils import data_dir
 from fractal.matrix import MatrixClient, parse_matrix_id
 
@@ -41,6 +41,7 @@ class FractalDatabaseController(AuthenticatedController):
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
             await client.join_room(room_id)
 
+    @auth_required
     @cli_method
     def invite(self, user_id: str, room_id: str, admin: bool = False):
         """
@@ -62,6 +63,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         print(f"Successfully invited {user_id} to {room_id}")
 
+    @auth_required
     @cli_method
     def join(self, room_id: str):
         """
@@ -93,6 +95,7 @@ class FractalDatabaseController(AuthenticatedController):
                 print(f"Failed to find app {app}. Is it installed?")
                 exit(1)
 
+        os.makedirs(data_dir, exist_ok=True)
         os.chdir(data_dir)
         try:
             if app:
@@ -105,9 +108,11 @@ class FractalDatabaseController(AuthenticatedController):
 
         # add fractal_database to INSTALLED_APPS
         if app:
-            to_write = f"INSTALLED_APPS += ['{app}', 'fractal_database']\n"
+            to_write = (
+                f"INSTALLED_APPS += ['{app}', 'fractal_database_matrix', 'fractal_database']\n"
+            )
         else:
-            to_write = "INSTALLED_APPS += ['fractal_database']\n"
+            to_write = "INSTALLED_APPS += ['fractal_database_matrix', 'fractal_database']\n"
 
         file_path = "appdb/appdb/settings.py" if app else "rootdb/rootdb/settings.py"
         with open(file_path, "a") as f:
@@ -270,7 +275,7 @@ RUN pip install /fractal/fractal-database/
             raise Exception("Failed to find fractal key in pyproject.toml.")
         return pyproject
 
-    def _build(self, image_tag: str, verbose: bool = False):
+    def _build(self, name: str, verbose: bool = False) -> str:
         """
         Builds a given database into a Docker container and exports it as a tarball.
 
@@ -285,6 +290,7 @@ RUN pip install /fractal/fractal-database/
             exit(1)
 
         client = docker.from_env()
+        image_tag = f"{name}:fractal-database"
 
         # ensure base image is built
         if client.images.list(name=FRACTAL_BASE_IMAGE) == []:
@@ -295,6 +301,8 @@ FROM {FRACTAL_BASE_IMAGE}
 RUN mkdir /code
 COPY . /code
 RUN pip install /code
+
+RUN fractal db init --app {name}
 """
         # FIXME: Have to monkey patch in order to build from in-memory Dockerfiles correctly
         docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
@@ -313,7 +321,9 @@ RUN pip install /code
             if "stream" in line:
                 if verbose:
                     print(line["stream"], end="")
+        return image_tag
 
+    @auth_required
     @cli_method
     def deploy(self, verbose: bool = False):
         """
@@ -339,8 +349,7 @@ RUN pip install /code
             print(f"Failed to load pyproject.toml: {e}")
             exit(1)
 
-        image_tag = f"{name}:fractal-database"
-        self._build(image_tag, verbose=verbose)
+        image_tag = self._build(name, verbose=verbose)
 
         path = os.getcwd()
         print(f"\nExtracting image as tarball in {path}")
