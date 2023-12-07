@@ -4,6 +4,7 @@ import os
 import subprocess
 from io import BytesIO
 from sys import exit
+from typing import Any, Dict
 
 import docker
 import docker.api.build
@@ -126,8 +127,8 @@ class FractalDatabaseController(AuthenticatedController):
         ] = ">=4.0.0"  # FIXME: Hardcoded version
         pyproject["tool"]["poetry"]["dependencies"][
             "fractal-database"
-        ] = ">=1.0.0"  # FIXME: Hardcoded version
-
+        ] = ">=0.0.1"  # FIXME: Hardcoded version
+        pyproject["tool"]["fractal"] = {}
         with open("pyproject.toml", "w") as f:
             f.write(toml.dumps(pyproject))
 
@@ -227,44 +228,43 @@ RUN pip install /fractal/fractal-database/
             decode=True,
             nocache=True,
         )
-        if verbose:
-            for line in response:
-                if "stream" in line:
+        for line in response:
+            if "stream" in line:
+                if verbose:
                     print(line["stream"], end="")
 
         os.chdir(original_dir)
         print(f"Successfully built Docker image {FRACTAL_BASE_IMAGE}.")
 
-    @cli_method
-    def deploy(self, verbose: bool = False):
-        """
-        Builds a given database into a Docker container and exports it as a tarball, and
-        uploads it to the Fractal Matrix server.
+    def _get_fractal_app(self) -> Dict[str, Any]:
+        # ensure current directory is a fractal app
+        try:
+            with open("pyproject.toml") as f:
+                pyproject = toml.loads(f.read())
+                pyproject["tool"]["fractal"]
+        except FileNotFoundError:
+            print("Failed to find pyproject.toml in current directory.")
+            print("You must be in the directory where pyproject.toml is located.")
+            raise Exception("Failed to find pyproject.toml in current directory.")
+        except KeyError:
+            print("Failed to find fractal key in pyproject.toml.")
+            print("This project must be a Fractal Database app.")
+            raise Exception("Failed to find fractal key in pyproject.toml.")
+        return pyproject
 
-        Must be in the directory where pyproject.toml is located.
+    def _build(self, image_tag: str, verbose: bool = False):
+        """
+        Builds a given database into a Docker container and exports it as a tarball.
+
         ---
         Args:
+            image_tag: The Docker image tag to build.
             verbose: Whether or not to print verbose output.
-
         """
-        path = "."
-        # load pyproject.toml to get project name
         try:
-            with open(f"{path}/pyproject.toml") as f:
-                pyproject = f.read()
-        except FileNotFoundError:
-            path = os.getcwd()
-            print(f"Failed to find pyproject.toml in {path}")
-            print("You must be in the directory where pyproject.toml is located.")
+            self._get_fractal_app()
+        except Exception:
             exit(1)
-
-        try:
-            name = toml.loads(pyproject)["tool"]["poetry"]["name"]
-        except Exception as e:
-            print(f"Failed to load pyproject.toml: {e}")
-            exit(1)
-
-        image_tag = f"{name}:fractal-database"
 
         client = docker.from_env()
 
@@ -291,11 +291,38 @@ RUN pip install /code
             decode=True,
             nocache=True,
         )
-        if verbose:
-            for line in response:
-                if "stream" in line:
+        for line in response:
+            if "stream" in line:
+                if verbose:
                     print(line["stream"], end="")
-        # self.build(image_tag, verbose=verbose)
+
+    @cli_method
+    def deploy(self, verbose: bool = False):
+        """
+        Builds a given database into a Docker container and exports it as a tarball, and
+        uploads it to the Fractal Matrix server.
+
+        Must be in the directory where pyproject.toml is located.
+        ---
+        Args:
+            verbose: Whether or not to print verbose output.
+
+        """
+        path = "."
+        # load pyproject.toml to get project name
+        try:
+            pyproject = self._get_fractal_app()
+        except Exception:
+            exit(1)
+
+        try:
+            name = pyproject["tool"]["poetry"]["name"]
+        except Exception as e:
+            print(f"Failed to load pyproject.toml: {e}")
+            exit(1)
+
+        image_tag = f"{name}:fractal-database"
+        self._build(image_tag, verbose=verbose)
 
         path = os.getcwd()
         print(f"\nExtracting image as tarball in {path}")
