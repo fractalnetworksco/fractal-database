@@ -229,7 +229,11 @@ class FractalDatabaseController(AuthenticatedController):
         dockerfile = """
 FROM python:3.11.4
 RUN mkdir /fractal
-COPY . /fractal
+COPY fractal-database-matrix/ /fractal/fractal-database-matrix/
+COPY fractal-database/ /fractal/fractal-database/
+COPY taskiq-matrix/ /fractal/taskiq-matrix/
+COPY fractal-matrix-client/ /fractal/fractal-matrix-client/
+COPY fractal-cli/ /fractal/fractal-cli/
 RUN pip install /fractal/fractal-cli/
 RUN pip install /fractal/fractal-matrix-client/
 RUN pip install /fractal/taskiq-matrix/
