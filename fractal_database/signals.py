@@ -99,16 +99,6 @@ def increment_version(sender, instance, **kwargs) -> None:
     instance.refresh_from_db()
 
 
-def launch_replication_agent(
-    sender: "Database", instance: "Database", created: bool, raw: bool, **kwargs
-) -> None:
-    if instance.database:
-        # check which type of replication agent to launch
-        target = instance.database.replicationtarget_set.filter(primary=True)[0]
-        target.module.launch()
-        logger.info(f"Launching replication agent for {instance.database} using {target.module}")
-
-
 def object_post_save(
     sender: "ReplicatedModel", instance: "ReplicatedModel", created: bool, raw: bool, **kwargs
 ) -> None:
@@ -138,6 +128,7 @@ def object_post_save(
         logger.info(f"Outermost post save instance: {instance}")
 
         from fractal_database.models import (
+            AppDatabase,
             Database,
             DummyReplicationTarget,
             RootDatabase,
@@ -146,9 +137,14 @@ def object_post_save(
         if isinstance(instance, RootDatabase) or isinstance(instance, Database):
             database = instance
         else:
-            database = instance.database
+            try:
+                database = RootDatabase.objects.get()
+            except RootDatabase.DoesNotExist:
+                database = AppDatabase.objects.get()
+
         # create a dummy replication target if none exists so we can replicate when a real target is added
-        if not database.replicationtarget_set.exists():  # type: ignore
+        # if not database.replicationtarget_set.exists():  # type: ignore
+        if not database.get_all_replication_targets():
             DummyReplicationTarget.objects.create(
                 name="dummy",
                 database=database,
@@ -160,48 +156,6 @@ def object_post_save(
 
     finally:
         exit_signal_handler()
-
-
-def set_object_database(
-    sender: "ReplicatedModel", instance: "ReplicatedModel", raw: bool, **kwargs
-) -> None:
-    """
-    Set the database for a user defined model
-    """
-    if raw:
-        return
-
-    from fractal_database.models import Database, RootDatabase
-
-    if isinstance(instance, RootDatabase):
-        try:
-            database = RootDatabase.objects.get()
-            raise Exception("Only one root database can exist in a root database")
-        except RootDatabase.DoesNotExist:
-            instance.database = instance  # type: ignore
-            return
-
-    try:
-        root_database = RootDatabase.objects.get()
-        # if this object is a database inside a root database set the database to RootDatabase
-        instance.database = root_database
-        return
-    except RootDatabase.DoesNotExist:
-        # in an instance database
-        # get the sole Database and set it as the database for this object
-        if isinstance(instance, Database):
-            try:
-                database = Database.objects.get()
-                # return if current instance is the sole existing database
-                if database == instance:
-                    return
-                raise Exception("Only one database can exist in an instance database")
-            except Database.DoesNotExist:
-                return
-
-        # set the database to the sole Database on the user defined model
-        database = Database.objects.get()
-        instance.database = database
 
 
 def create_project_database(*args, **kwargs) -> None:

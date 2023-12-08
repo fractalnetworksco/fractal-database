@@ -1,8 +1,9 @@
 import os
 import sys
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
-from fractal_database.models import Database, ReplicatedModelRepresentation
+from fractal_database.models import AppDatabase, RootDatabase
 from fractal_database_matrix.models import MatrixReplicationTarget
 
 
@@ -14,20 +15,31 @@ class Command(BaseCommand):
         pass
 
     def handle(self, *args, **options):
-        # TODO: handle RootDatabase
-        try:
-            database = Database.objects.get()
-        except Database.DoesNotExist:
-            raise CommandError("No database configured. Have you applied migrations?")
+        if not os.environ.get("MATRIX_ROOM_ID"):
+            try:
+                try:
+                    database = RootDatabase.objects.get()
+                except RootDatabase.DoesNotExist:
+                    database = AppDatabase.objects.get()
+            except ObjectDoesNotExist:
+                raise CommandError("No database configured. Have you applied migrations?")
 
-        representation = ReplicatedModelRepresentation.objects.get(object_id=database.uuid)
-        room_id = representation.metadata["room_id"]
+            # FIXME: Handle multiple replication targets. For now just using
+            # MatrixReplicationTarget
+            target = MatrixReplicationTarget.objects.get(object_id=database.uuid)
+            access_token = target.access_token
+            homeserver_url = target.homeserver
+            room_id = target.metadata["room_id"]
+        else:
+            try:
+                room_id = os.environ["MATRIX_ROOM_ID"]
+                access_token = os.environ["MATRIX_ACCESS_TOKEN"]
+                homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
+            except KeyError as e:
+                raise CommandError(
+                    f"Missing environment variable {e}. Have you configured the MatrixReplicationTarget?"
+                ) from e
 
-        # FIXME: Handle multiple replication targets. For now just using
-        # MatrixReplicationTarget
-        target = MatrixReplicationTarget.objects.get(database_id=database.uuid)
-        access_token = target.access_token
-        homeserver_url = target.homeserver
         settings_module = os.environ.get("DJANGO_SETTINGS_MODULE")
 
         process_env = os.environ.copy()

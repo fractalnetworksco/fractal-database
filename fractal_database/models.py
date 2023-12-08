@@ -1,9 +1,10 @@
 import logging
 from importlib import import_module
-from typing import Any, Callable, List
+from typing import Callable, List, Optional
 from uuid import uuid4
 
-from asgiref.sync import async_to_sync, sync_to_async
+from asgiref.sync import sync_to_async
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
@@ -49,15 +50,6 @@ class ReplicatedModel(BaseModel):
     # for example, a model that replicated to a MatrixReplicationTarget will store its associated
     # Matrix room_id in this property
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
-    # all replicated models belong to a database
-    # this property determines where the model is replicated to
-    database = models.ForeignKey(
-        "fractal_database.Database",
-        on_delete=models.CASCADE,
-        related_name="%(app_label)s_%(class)s_database",
-    )
-    repr = GenericRelation("fractal_database.ReplicatedModelRepresentation")
-
     # track subclasses
     models = []
     repr_models = []
@@ -86,14 +78,14 @@ class ReplicatedModel(BaseModel):
 
     @classmethod
     def connect_signals(cls, **kwargs):
-        from fractal_database.signals import object_post_save, set_object_database
+        from fractal_database.signals import object_post_save  # , set_object_database
 
         for model_class in cls.models:
             logger.info(
                 'Registering replication signals for model "{}"'.format(model_class.__name__)
             )
             # pre save signal to automatically set the database property on all ReplicatedModels
-            models.signals.pre_save.connect(set_object_database, sender=model_class)
+            # models.signals.pre_save.connect(set_object_database, sender=model_class)
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
 
@@ -107,13 +99,18 @@ class ReplicatedModel(BaseModel):
         if isinstance(self, Database) or isinstance(self, RootDatabase):
             database = self
         else:
-            database = self.database
+            try:
+                root_database_model = apps.get_model("fractal_database", "RootDatabase")
+                database = root_database_model.objects.get()
+            except RootDatabase.DoesNotExist:
+                app_database_model = apps.get_model("fractal_database", "AppDatabase")
+                database = app_database_model.objects.get()
 
         # TODO replication targets to implement their own serialization strategy
-        targets = database.replicationtarget_set.all()  # type: ignore
+        targets = database.get_all_replication_targets()
         repr_logs = None
-        for parent_target in targets:
-            target = parent_target.target
+        for target in targets:
+            # target = parent_target.target
             # pass this replicated model instance to the target's replication method
             if created:
                 # FIXME: this method name is really confusing
@@ -138,61 +135,18 @@ class ReplicatedModel(BaseModel):
             defer_replication(target)
 
 
-class ReplicatedModelRepresentation(BaseModel):
-    metadata = models.JSONField(default=dict)
-    target = models.ForeignKey("fractal_database.ReplicationTarget", on_delete=models.CASCADE)
-    instance = GenericForeignKey()
-    object_id = models.CharField(max_length=255)
-    content_type = models.ForeignKey(
+class ReplicationLog(BaseModel):
+    payload = models.JSONField(encoder=DjangoJSONEncoder)
+    object_version = models.PositiveIntegerField(default=0)
+    target = GenericForeignKey("target_type", "target_id")
+    target_type = models.ForeignKey(
         ContentType,
         on_delete=models.CASCADE,
         blank=True,
         null=True,
-        related_name="%(app_label)s_%(class)s_content_type",
+        related_name="%(app_label)s_%(class)s_target_type",
     )
-
-    class Meta:
-        indexes = [
-            models.Index(fields=["content_type", "object_id"]),
-        ]
-
-
-class Database(ReplicatedModel, MatrixSpace):
-    # TODO shouldn't be importing fractal_database_matrix stuff here
-    # figure out a way to register representations on remote models from
-    # fractal_database_matrix
-    name = models.CharField(max_length=255)
-    description = models.TextField(blank=True, null=True)
-    database = models.ForeignKey(
-        "fractal_database.RootDatabase",
-        on_delete=models.CASCADE,
-        related_name="%(app_label)s_%(class)s_root_database",
-        null=True,
-        blank=True,
-    )
-
-    def __str__(self) -> str:
-        return self.name
-
-
-class RootDatabase(Database, MatrixSpace):
-    root = SingletonField()
-
-    class Meta:
-        # enforce that only one root=True RootDatabase can exist per RootDatabase
-        constraints = [
-            models.UniqueConstraint(
-                fields=["root"],
-                condition=models.Q(root=True),
-                name="unique_root_database_singleton",
-            )
-        ]
-
-
-class ReplicationLog(BaseModel):
-    payload = models.JSONField(encoder=DjangoJSONEncoder)
-    object_version = models.PositiveIntegerField(default=0)
-    target = models.ForeignKey("fractal_database.ReplicationTarget", on_delete=models.CASCADE)
+    target_id = models.CharField(max_length=255)
     instance = GenericForeignKey()
     object_id = models.CharField(max_length=255)
     content_type = models.ForeignKey(
@@ -234,23 +188,34 @@ class ReplicationTarget(ReplicatedModel):
 
     name = models.CharField(max_length=255, unique=True)
     enabled = models.BooleanField(default=True)
-    database = models.ForeignKey(Database, on_delete=models.CASCADE)
+    database = GenericForeignKey()
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name="%(app_label)s_%(class)s_content_type",
+    )
+    object_id = models.CharField(max_length=255)
     # replication events are only consumed from the primary target for a database
     primary = models.BooleanField(default=False)
     # This field will store the content type of the subclass
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    # This is the generic foreign key to the subclass
-    content_object = GenericForeignKey("content_type", "uuid")
+    # content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    # # This is the generic foreign key to the subclass
+    # content_object = GenericForeignKey("content_type", "uuid")
+    # metadata is a map of properties that are specific to the target
+    metadata = models.JSONField(default=dict)
 
     class Meta:
         # enforce that only one primary=True ReplicationTarget can exist per Database
         # a primary replication target represents the canonical source of truth for a database
         # secondary replication targets serve as a fallback in case the primary target is unavailable
+        abstract = True
         constraints = [
             models.UniqueConstraint(
-                fields=["database"],
+                fields=["content_type"],
                 condition=models.Q(primary=True),
-                name="unique_primary_per_database",
+                name="%(app_label)s_%(class)s_unique_primary_per_database",
             )
         ]
 
@@ -280,14 +245,14 @@ class ReplicationTarget(ReplicatedModel):
 
     async def get_repl_logs_by_txn(self) -> List[BaseManager[ReplicationLog]]:
         txn_ids = (
-            ReplicationLog.objects.filter(target=self, deleted=False)
+            ReplicationLog.objects.filter(target_id=self.uuid, deleted=False)
             .values_list("txn_id", flat=True)
             .distinct()
         )
         return [
-            ReplicationLog.objects.filter(txn_id=txn_id, deleted=False, target=self).order_by(
-                "date_created"
-            )
+            ReplicationLog.objects.filter(
+                txn_id=txn_id, deleted=False, target_id=self.uuid
+            ).order_by("date_created")
             async for txn_id in txn_ids
         ]
 
@@ -306,7 +271,15 @@ class ReplicationTarget(ReplicatedModel):
 
 
 class RepresentationLog(BaseModel):
-    target = models.ForeignKey(ReplicationTarget, on_delete=models.CASCADE)
+    target = GenericForeignKey("target_type", "target_id")
+    target_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name="%(app_label)s_%(class)s_target_type",
+    )
+    target_id = models.CharField(max_length=255)
     method = models.CharField(max_length=255)
     instance = GenericForeignKey()
     object_id = models.CharField(max_length=255)
@@ -332,7 +305,7 @@ class RepresentationLog(BaseModel):
     async def apply(self):
         repr_method = self._import_method(self.method)
         print("Calling ReplicationLog's repr_log method: ", repr_method)
-        await repr_method(self, self.target_id)
+        await repr_method(self, self.target_id)  # type: ignore
         await self.aupdate(deleted=True)
 
 
@@ -342,6 +315,46 @@ class DummyReplicationTarget(ReplicationTarget):
 
     def create_representation_logs(self, instance):
         pass
+
+
+class Database(ReplicatedModel, MatrixSpace):
+    # TODO shouldn't be importing fractal_database_matrix stuff here
+    # figure out a way to register representations on remote models from
+    # fractal_database_matrix
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+
+    class Meta:
+        abstract = True
+
+    def __str__(self) -> str:
+        return self.name
+
+    def get_all_replication_targets(self) -> List[Optional[ReplicationTarget]]:
+        targets = []
+        for subclass in ReplicationTarget.__subclasses__():
+            targets.extend(
+                subclass.objects.filter(object_id=self.uuid).select_related("content_type")
+            )
+        return targets
+
+
+class AppDatabase(Database):
+    pass
+
+
+class RootDatabase(Database, MatrixSpace):
+    root = SingletonField()
+
+    class Meta:
+        # enforce that only one root=True RootDatabase can exist per RootDatabase
+        constraints = [
+            models.UniqueConstraint(
+                fields=["root"],
+                condition=models.Q(root=True),
+                name="unique_root_database_singleton",
+            )
+        ]
 
 
 class Snapshot(ReplicatedModel):
