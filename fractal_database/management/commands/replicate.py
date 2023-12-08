@@ -24,14 +24,12 @@ class Command(BaseCommand):
             except ObjectDoesNotExist:
                 raise CommandError("No database configured. Have you applied migrations?")
 
-            representation = MatrixReplicationTarget.objects.get(database=database)
-            room_id = representation.metadata["room_id"]
-
             # FIXME: Handle multiple replication targets. For now just using
             # MatrixReplicationTarget
-            target = MatrixReplicationTarget.objects.get(database_id=database.uuid)
+            target = MatrixReplicationTarget.objects.get(object_id=database.uuid)
             access_token = target.access_token
             homeserver_url = target.homeserver
+            room_id = target.metadata["room_id"]
         else:
             try:
                 room_id = os.environ["MATRIX_ROOM_ID"]
