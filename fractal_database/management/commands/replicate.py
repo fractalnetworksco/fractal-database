@@ -1,8 +1,9 @@
 import os
 import sys
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
-from fractal_database.models import Database, ReplicatedModelRepresentation
+from fractal_database.models import AppDatabase, RootDatabase
 from fractal_database_matrix.models import MatrixReplicationTarget
 
 
@@ -14,14 +15,16 @@ class Command(BaseCommand):
         pass
 
     def handle(self, *args, **options):
-        # TODO: handle RootDatabase
         if not os.environ.get("MATRIX_ROOM_ID"):
             try:
-                database = Database.objects.get()
-            except Database.DoesNotExist:
+                try:
+                    database = RootDatabase.objects.get()
+                except RootDatabase.DoesNotExist:
+                    database = AppDatabase.objects.get()
+            except ObjectDoesNotExist:
                 raise CommandError("No database configured. Have you applied migrations?")
 
-            representation = ReplicatedModelRepresentation.objects.get(object_id=database.uuid)
+            representation = MatrixReplicationTarget.objects.get(database=database)
             room_id = representation.metadata["room_id"]
 
             # FIXME: Handle multiple replication targets. For now just using
