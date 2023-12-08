@@ -65,18 +65,18 @@ class ReplicatedModel(BaseModel):
     class Meta:
         abstract = True
 
-    # def save(self, *args, **kwargs):
-    #     """
-    #     Gaurds on the object version to ensure that the object version is incremented monotonically
-    #     """
-    #     with transaction.atomic():
-    #         try:
-    #             current = type(self).objects.select_for_update().get(pk=self.pk)
-    #             if self.object_version + 1 <= current.object_version:
-    #                 raise StaleObjectException()
-    #         except ObjectDoesNotExist:
-    #             pass
-    #         super().save(*args, **kwargs)  # Call the "real" save() method.
+    def save(self, *args, **kwargs):
+        """
+        Gaurds on the object version to ensure that the object version is incremented monotonically
+        """
+        with transaction.atomic():
+            try:
+                current = type(self).objects.select_for_update().get(pk=self.pk)
+                if self.object_version + 1 <= current.object_version:
+                    raise StaleObjectException()
+            except ObjectDoesNotExist:
+                pass
+            super().save(*args, **kwargs)  # Call the "real" save() method.
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
