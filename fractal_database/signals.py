@@ -99,16 +99,6 @@ def increment_version(sender, instance, **kwargs) -> None:
     instance.refresh_from_db()
 
 
-def launch_replication_agent(
-    sender: "Database", instance: "Database", created: bool, raw: bool, **kwargs
-) -> None:
-    if instance.database:
-        # check which type of replication agent to launch
-        target = instance.database.replicationtarget_set.filter(primary=True)[0]
-        target.module.launch()
-        logger.info(f"Launching replication agent for {instance.database} using {target.module}")
-
-
 def object_post_save(
     sender: "ReplicatedModel", instance: "ReplicatedModel", created: bool, raw: bool, **kwargs
 ) -> None:
@@ -138,6 +128,7 @@ def object_post_save(
         logger.info(f"Outermost post save instance: {instance}")
 
         from fractal_database.models import (
+            AppDatabase,
             Database,
             DummyReplicationTarget,
             RootDatabase,
@@ -146,7 +137,11 @@ def object_post_save(
         if isinstance(instance, RootDatabase) or isinstance(instance, Database):
             database = instance
         else:
-            database = instance.database
+            try:
+                database = RootDatabase.objects.get()
+            except RootDatabase.DoesNotExist:
+                database = AppDatabase.objects.get()
+
         # create a dummy replication target if none exists so we can replicate when a real target is added
         # if not database.replicationtarget_set.exists():  # type: ignore
         if not database.get_all_replication_targets():
