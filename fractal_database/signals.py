@@ -43,6 +43,7 @@ def commit(target: "ReplicationTarget") -> None:
     """
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
+    print("Inside signals: commit")
     async_to_sync(target.replicate)()
     clear_deferred_replications(target.name)
 
@@ -114,6 +115,7 @@ def object_post_save(
     """
     Schedule replication for a ReplicatedModel instance
     """
+    print("In post save")
     if raw:
         logger.info(f"Loading instance from fixture: {instance}")
         return None
@@ -222,12 +224,12 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
 
     # make sure the appropriate matrix env vars are set
     homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
+    # TODO move access_token to a non-replicated model
     access_token = os.environ["MATRIX_ACCESS_TOKEN"]
     project_name = os.path.basename(settings.BASE_DIR)
     database = RootDatabase.objects.get(name=project_name)
 
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
-
     target, created = MatrixReplicationTarget.objects.get_or_create(
         name="matrix",
         defaults={
@@ -238,9 +240,3 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
             "access_token": access_token,
         },
     )
-
-    # replicate the database to the new created MatrixReplicationTarget
-    logger.info("Replicating %s to %s" % (database, target))
-    # call schedule_replication with created True so the representation will
-    # be created on the Matrix homeserver
-    database.schedule_replication(created=created)

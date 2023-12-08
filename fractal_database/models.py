@@ -65,18 +65,18 @@ class ReplicatedModel(BaseModel):
     class Meta:
         abstract = True
 
-    def save(self, *args, **kwargs):
-        """
-        Gaurds on the object version to ensure that the object version is incremented monotonically
-        """
-        with transaction.atomic():
-            try:
-                current = type(self).objects.select_for_update().get(pk=self.pk)
-                if self.object_version + 1 <= current.object_version:
-                    raise StaleObjectException()
-            except ObjectDoesNotExist:
-                pass
-            super().save(*args, **kwargs)  # Call the "real" save() method.
+    # def save(self, *args, **kwargs):
+    #     """
+    #     Gaurds on the object version to ensure that the object version is incremented monotonically
+    #     """
+    #     with transaction.atomic():
+    #         try:
+    #             current = type(self).objects.select_for_update().get(pk=self.pk)
+    #             if self.object_version + 1 <= current.object_version:
+    #                 raise StaleObjectException()
+    #         except ObjectDoesNotExist:
+    #             pass
+    #         super().save(*args, **kwargs)  # Call the "real" save() method.
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
@@ -211,7 +211,27 @@ class ReplicationLog(BaseModel):
         ]
 
 
-class ReplicationTarget(BaseModel):
+class ReplicationTarget(ReplicatedModel):
+    """
+    Why replicate ReplicationTargets?
+
+    In our original design ReplicationTargets were not ReplicatedModels
+    we decided to make them ReplicatedModels because we thought it would make things easier for end users.
+
+    For example, in a private context you may want to configure all of your devices to start replicating to
+    another target.
+
+    In a public context users may want to contribute to the resilience of a dataset by publishing their
+    homeserver as a replication target.
+
+    In general, because ReplicationTargets store the necessary context needed to sync and replicate data
+    from/to remote datastores, replicating them allows new devices to contribute to the replication
+    swarm.
+
+    In the future, perhaps replicating the same dataset to different Matrix rooms (as oppose to relying
+    solely on Matrix's federation) would lend itself to a more scalable decentralized replication model.
+    """
+
     name = models.CharField(max_length=255, unique=True)
     enabled = models.BooleanField(default=True)
     database = models.ForeignKey(Database, on_delete=models.CASCADE)
@@ -309,10 +329,10 @@ class RepresentationLog(BaseModel):
         repr_class = getattr(repr_module, repr_class)
         return getattr(repr_class, repr_method)
 
-    async def apply(self, target):
+    async def apply(self):
         repr_method = self._import_method(self.method)
         print("Calling ReplicationLog's repr_log method: ", repr_method)
-        await repr_method(self, target)
+        await repr_method(self, self.target_id)
         await self.aupdate(deleted=True)
 
 
