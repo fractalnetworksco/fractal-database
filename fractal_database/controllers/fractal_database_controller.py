@@ -13,7 +13,8 @@ from django.core.management.base import CommandError
 from fractal.cli import cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
 from fractal.cli.utils import data_dir
-from fractal.matrix import MatrixClient, parse_matrix_id
+from fractal.matrix import MatrixClient
+from fractal.matrix.utils import parse_matrix_id
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
