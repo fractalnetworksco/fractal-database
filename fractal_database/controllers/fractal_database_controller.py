@@ -428,9 +428,7 @@ RUN fractal db init --app {name}
             print(f"Failed to extract image: {e}")
             exit(1)
 
-        # TODO: Push to Matrix Room
-
-        print("Done.")
+        return self.upload(f"{name}.tar", quiet=verbose)
 
     @auth_required
     @cli_method
