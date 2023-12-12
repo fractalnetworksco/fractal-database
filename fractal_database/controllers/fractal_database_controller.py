@@ -2,6 +2,8 @@ import asyncio
 import importlib
 import os
 import subprocess
+import sys
+from functools import partial
 from sys import exit
 from typing import Any, Dict, Optional
 
@@ -15,6 +17,7 @@ from fractal.cli.controllers.authenticated import AuthenticatedController, auth_
 from fractal.cli.utils import data_dir
 from fractal.matrix import MatrixClient
 from fractal.matrix.utils import parse_matrix_id
+from nio import TransferMonitor
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
@@ -41,6 +44,67 @@ class FractalDatabaseController(AuthenticatedController):
     async def _join_room(self, room_id: str) -> None:
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
             await client.join_room(room_id)
+
+    async def _upload_file(self, file: str, monitor: Optional[TransferMonitor] = None) -> str:
+        async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
+            return await client.upload_file(file, monitor=monitor)
+
+    # async def _download_file(
+    #     self, mxc_uri: str, save_path: os.PathLike, monitor: Optional[TransferMonitor] = None
+    # ) -> None:
+    #     async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
+    #         res = await client.download(mxc=mxc_uri, save_to=save_path, monitor=monitor)
+    #         print(f"Got res: {res}")
+    #         return None
+
+    def print_progress_bar(
+        self,
+        iteration: int,
+        total: int,
+        prefix="Upload Progress: ",
+        length=50,
+        fill="█",
+        monitor: Optional[TransferMonitor] = None,
+    ):
+        """
+        Call this function to print the progress bar.
+
+        :param iteration: current progress (e.g., bytes uploaded so far).
+        :param total: total value to reach (e.g., total size of the file in bytes).
+        :param prefix: prefix string.
+        :param suffix: suffix string.
+        :param length: character length of the bar.
+        :param fill: bar fill character.
+        """
+        percent = ("{0:.1f}").format(100 * (iteration / float(total)))
+        filled_length = int(length * iteration // total)
+        bar = fill * filled_length + "-" * (length - filled_length)
+        current_MB = iteration / (1024 * 1024)
+        total_MB = total / (1024 * 1024)
+        remaining_time = ""
+        if monitor:
+            remaining_time = monitor.remaining_time
+        avg_speed = ""
+        if monitor:
+            avg_speed = f"{monitor.average_speed / (1024 * 1024):.2f}MB/s"
+
+        if not remaining_time:
+            estimated_time = "Calculating Remaining Time..."
+        else:
+            # pretty print time deltatime
+            estimated_time = f"Estimated Time Remaining: {remaining_time.seconds // 60}m {remaining_time.seconds % 60}s"
+
+        sys.stdout.write(
+            f"\r{prefix} |{bar}| {percent}% ({current_MB:.2f}MB / {total_MB:.2f}MB @ {avg_speed}): {estimated_time}"
+        )
+        sys.stdout.flush()
+        if iteration == total:
+            print()
+
+    def _print_file_progress(
+        self, transferred: int, file_size: int, monitor: TransferMonitor
+    ) -> None:
+        self.print_progress_bar(transferred, file_size, monitor=monitor)
 
     @auth_required
     @cli_method
@@ -367,6 +431,89 @@ RUN fractal db init --app {name}
         # TODO: Push to Matrix Room
 
         print("Done.")
+
+    @auth_required
+    @cli_method
+    def upload(self, file: str, quiet: bool = False):
+        """
+        Builds a given database into a Docker container and exports it as a tarball, and
+        uploads it to the Fractal Matrix server.
+
+        Must be in the directory where pyproject.toml is located.
+        ---
+        Args:
+            file: The tarball file to upload.
+            quiet: Whether or not to print verbose output (Progress bar).
+
+        """
+        try:
+            file_size = os.path.getsize(file)
+        except FileNotFoundError:
+            print(f"Failed to find file {file}.")
+            exit(1)
+
+        monitor = None
+        if not quiet:
+            monitor = TransferMonitor(total_size=file_size)
+            progress_bar = partial(
+                self._print_file_progress,
+                file_size=file_size,
+                monitor=monitor,
+            )
+            monitor.on_transferred = progress_bar
+
+        try:
+            content_uri = asyncio.run(self._upload_file(file, monitor=monitor))
+        except Exception as e:
+            print(f"Failed to upload file: {e}")
+            exit(1)
+        except KeyboardInterrupt:
+            print("\nCancelled upload.")
+            exit(1)
+
+        print(f"Successfully uploaded {file} to {content_uri}")
+
+    # @auth_required
+    # @cli_method
+    # def download(self, mxc_uri: str, download_path: str = ".", quiet: bool = False):
+    #     """
+    #     Builds a given database into a Docker container and exports it as a tarball, and
+    #     uploads it to the Fractal Matrix server.
+
+    #     Must be in the directory where pyproject.toml is located.
+    #     ---
+    #     Args:
+    #         mxc_uri: The mxc:// URI to download.
+    #         download_path: The path to download the file to. Defaults to current directory.
+    #         quiet: Whether or not to print verbose output (Progress bar).
+
+    #     """
+    #     try:
+    #         file_size = os.path.getsize(file)
+    #     except FileNotFoundError:
+    #         print(f"Failed to find file {file}.")
+    #         exit(1)
+
+    #     monitor = None
+    #     if not quiet:
+    #         monitor = TransferMonitor(total_size=file_size)
+    #         progress_bar = partial(
+    #             self._print_file_progress,
+    #             file_size=file_size,
+    #             monitor=monitor,
+    #         )
+    #         monitor.on_transferred = progress_bar
+
+    #     try:
+    #         content_uri = asyncio.run(self._upload_file(file, monitor=monitor))
+    #     except Exception as e:
+    #         print(f"Failed to upload file: {e}")
+    #         exit(1)
+    #     except KeyboardInterrupt:
+    #         print("\nCancelled upload.")
+    #         exit(1)
+
+    #     print(f"Successfully uploaded {file} to {content_uri}")
 
 
 Controller = FractalDatabaseController
