@@ -13,12 +13,18 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.manager import BaseManager
 from fractal_database.exceptions import StaleObjectException
+
+# TODO shouldn't be importing fractal_database_matrix stuff here
+# figure out a way to register representations on remote models from
+# fractal_database_matrix
 from fractal_database_matrix.representations import MatrixSpace
 
 from .fields import SingletonField
 from .signals import defer_replication
 
-logger = logging.getLogger("django")
+logger = logging.getLogger(__name__)
+# to get console output from logger:
+# logger = logging.getLogger("django")
 
 
 class BaseModel(models.Model):
@@ -103,7 +109,7 @@ class ReplicatedModel(BaseModel):
                 root_database_model = apps.get_model("fractal_database", "RootDatabase")
                 database = root_database_model.objects.get()
             except RootDatabase.DoesNotExist:
-                app_database_model = apps.get_model("fractal_database", "AppDatabase")
+                app_database_model = apps.get_model("fractal_database", "AppInstance")
                 database = app_database_model.objects.get()
 
         # TODO replication targets to implement their own serialization strategy
@@ -317,10 +323,7 @@ class DummyReplicationTarget(ReplicationTarget):
         pass
 
 
-class Database(ReplicatedModel, MatrixSpace):
-    # TODO shouldn't be importing fractal_database_matrix stuff here
-    # figure out a way to register representations on remote models from
-    # fractal_database_matrix
+class Database(ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
 
@@ -339,12 +342,37 @@ class Database(ReplicatedModel, MatrixSpace):
         return targets
 
 
-class AppDatabase(Database):
-    pass
+class App(ReplicatedModel):
+    """
+    created when doing `fractal publish`
+    """
+
+    # can be used to install app with `fractal install <app_id>`
+    app_id = models.CharField(max_length=255, unique=True)
+    git_url = models.URLField()
+
+
+class AppInstance(Database, MatrixSpace):
+    """
+    created when doing `fractal install`
+    """
+
+    app_instance_id = models.CharField(max_length=255, unique=True)
+    app = models.ForeignKey(App, on_delete=models.DO_NOTHING)
+    devices = models.ManyToManyField("fractal_database.Device")
+
+
+class Device(ReplicatedModel):
+    device_id = models.CharField(max_length=255, unique=True)
 
 
 class RootDatabase(Database, MatrixSpace):
+    """
+    created when doing `fractal init`
+    """
+
     root = SingletonField()
+    devices = models.ManyToManyField("fractal_database.Device")
 
     class Meta:
         # enforce that only one root=True RootDatabase can exist per RootDatabase

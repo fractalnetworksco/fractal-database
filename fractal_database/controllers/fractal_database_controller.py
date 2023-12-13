@@ -17,6 +17,7 @@ from fractal.cli.controllers.authenticated import AuthenticatedController, auth_
 from fractal.cli.utils import data_dir
 from fractal.matrix import MatrixClient
 from fractal.matrix.utils import parse_matrix_id
+from fractal_database.utils import use_django
 from nio import TransferMonitor
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
@@ -185,6 +186,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         print(f"Successfully initialized Fractal Database project {data_dir}/{app or 'rootdb'}")
 
+    @use_django
     @cli_method
     def startapp(self, db_name: str):
         """
@@ -512,6 +514,21 @@ RUN fractal db init --app {name}
     #         exit(1)
 
     #     print(f"Successfully uploaded {file} to {content_uri}")
+
+    @use_django
+    @cli_method
+    def list_apps(self):
+        """
+        Lists all apps installed on this machine.
+        ---
+        Args:
+        """
+        from fractal_database.models import AppInstance
+
+        apps = AppInstance.objects.all()
+        print(apps)
+
+    list_apps.clicz_aliases = ["ls"]
 
 
 Controller = FractalDatabaseController

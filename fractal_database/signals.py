@@ -128,19 +128,18 @@ def object_post_save(
         logger.info(f"Outermost post save instance: {instance}")
 
         from fractal_database.models import (
-            AppDatabase,
-            Database,
+            AppInstance,
             DummyReplicationTarget,
             RootDatabase,
         )
 
-        if isinstance(instance, RootDatabase) or isinstance(instance, Database):
+        if isinstance(instance, RootDatabase) or isinstance(instance, AppInstance):
             database = instance
         else:
             try:
                 database = RootDatabase.objects.get()
             except RootDatabase.DoesNotExist:
-                database = AppDatabase.objects.get()
+                database = AppInstance.objects.get()
 
         # create a dummy replication target if none exists so we can replicate when a real target is added
         # if not database.replicationtarget_set.exists():  # type: ignore
