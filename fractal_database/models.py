@@ -288,8 +288,6 @@ class RepresentationLog(BaseModel):
     target_type = models.ForeignKey(
         ContentType,
         on_delete=models.CASCADE,
-        blank=True,
-        null=True,
         related_name="%(app_label)s_%(class)s_target_type",
     )
     target_id = models.CharField(max_length=255)
@@ -299,8 +297,6 @@ class RepresentationLog(BaseModel):
     content_type = models.ForeignKey(
         ContentType,
         on_delete=models.CASCADE,
-        blank=True,
-        null=True,
         related_name="%(app_label)s_%(class)s_content_type",
     )
     metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
@@ -319,14 +315,14 @@ class RepresentationLog(BaseModel):
         create_representation = self._import_method(self.method)
         print("Calling ReplicationLog's create_representation method: ", create_representation)
         metadata = await create_representation(self, self.target_id)  # type: ignore
-        model = self.content_type.model_class()
+        model: models.Model = self.content_type.model_class()  # type: ignore
         instance = await model.objects.aget(uuid=self.object_id)
         if isinstance(instance, Database):
             # fetch target and call store metadata on target
-            target = await self.target_type.model_class().objects.aget(uuid=self.target_id)
-            await target.store_metadata(metadata)
+            target = await self.target_type.model_class().objects.aget(uuid=self.target_id)  # type: ignore
+            await target.store_metadata(metadata)  # type: ignore
         else:
-            await instance.store_metadata(metadata)
+            await instance.store_metadata(metadata)  # type: ignore
 
         await self.aupdate(deleted=True)
 
@@ -349,7 +345,7 @@ class Database(ReplicatedModel):
     def __str__(self) -> str:
         return self.name
 
-    def get_all_replication_targets(self) -> List[Optional[ReplicationTarget]]:
+    def get_all_replication_targets(self) -> List[ReplicationTarget]:
         targets = []
         for subclass in ReplicationTarget.__subclasses__():
             targets.extend(
@@ -357,7 +353,7 @@ class Database(ReplicatedModel):
             )
         return targets
 
-    async def aget_all_replication_targets(self) -> List[Optional[ReplicationTarget]]:
+    async def aget_all_replication_targets(self) -> List[ReplicationTarget]:
         targets = []
         for subclass in ReplicationTarget.__subclasses__():
             async for t in subclass.objects.filter(object_id=self.uuid).select_related(
