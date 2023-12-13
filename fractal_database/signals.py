@@ -44,7 +44,10 @@ def commit(target: "ReplicationTarget") -> None:
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
     print("Inside signals: commit")
-    async_to_sync(target.replicate)()
+    try:
+        async_to_sync(target.replicate)()
+    except Exception as e:
+        logger.error(f"Error replicating {target}: {e}")
     clear_deferred_replications(target.name)
 
 
@@ -172,7 +175,7 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
     """
     Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
     """
-    from fractal_database.models import RootDatabase
+    from fractal_database.models import App, RootDatabase
     from fractal_database_matrix.models import MatrixReplicationTarget
 
     # make sure the appropriate matrix env vars are set
