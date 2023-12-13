@@ -102,7 +102,7 @@ class ReplicatedModel(BaseModel):
                 return self.schedule_replication(created=created)
 
         print("Inside ReplicatedModel.schedule_replication()")
-        if isinstance(self, Database) or isinstance(self, RootDatabase):
+        if isinstance(self, AppInstance) or isinstance(self, RootDatabase):
             database = self
         else:
             try:
@@ -225,6 +225,13 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
+    async def store_metadata(self, metadata: dict) -> None:
+        """
+        Store the Matrix room_id on target
+        """
+        self.metadata["room_id"] = metadata["room_id"]
+        await self.asave()
+
     def create_representation_logs(self, instance):
         """
         Create the representation logs (tasks) for creating a Matrix space
@@ -314,7 +321,13 @@ class RepresentationLog(BaseModel):
         metadata = await create_representation(self, self.target_id)  # type: ignore
         model = self.content_type.model_class()
         instance = await model.objects.aget(uuid=self.object_id)
-        await instance.store_metadata(metadata)
+        if isinstance(instance, Database):
+            # fetch target and call store metadata on target
+            target = await self.target_type.model_class().objects.aget(uuid=self.target_id)
+            await target.store_metadata(metadata)
+        else:
+            await instance.store_metadata(metadata)
+
         await self.aupdate(deleted=True)
 
 
@@ -353,15 +366,6 @@ class Database(ReplicatedModel):
                 targets.append(t)
         return targets
 
-    async def store_metadata(self, metadata: dict) -> None:
-        """
-        Store the Matrix room_id on all
-        """
-        targets = await self.aget_all_replication_targets()
-        for target in targets:
-            target.metadata["room_id"] = metadata["room_id"]
-            await target.asave()
-
 
 class App(ReplicatedModel, MatrixRoom):
     """
@@ -372,18 +376,18 @@ class App(ReplicatedModel, MatrixRoom):
     # can be used to install app with `fractal install <app_id>`
     # figure out how to enforce type safety on this field
     # this field should only be set when creating the representation for an App
-    app_id = models.JSONField(default=list)
+    app_ids = models.JSONField(default=list)
     git_url = models.URLField()
     checksum = models.CharField(max_length=255)
 
     async def store_metadata(self, metadata: dict) -> None:
-        self.app_id.append(metadata["room_id"])
+        self.app_ids.append(metadata["room_id"])
         await self.asave()
 
     def clean(self):
         # Custom validation to ensure my_field is a list
-        if not isinstance(self.app_id, list):
-            raise ValidationError({"App.app_id": "This field must be a list."})
+        if not isinstance(self.app_ids, list):
+            raise ValidationError({"App.app_ids": "This field must be a list."})
 
     def save(self, *args, **kwargs):
         # Call the custom validation
