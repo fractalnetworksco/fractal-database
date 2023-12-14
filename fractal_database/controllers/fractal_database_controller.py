@@ -147,13 +147,14 @@ class FractalDatabaseController(AuthenticatedController):
         print(f"Successfully joined {room_id}")
 
     @cli_method
-    def init(self, app: Optional[str] = None):
+    def init(self, app: Optional[str] = None, project_name: Optional[str] = None):
         """
         Starts a new Fractal Database project for this machine.
         Located in ~/.local/share/fractal/rootdb
         ---
         Args:
             app: The name of the database to start. If not provided, a root database is started.
+            project_name: The name of the project to start. Defaults to app name if app is provided,
 
         """
         if app:
@@ -165,29 +166,33 @@ class FractalDatabaseController(AuthenticatedController):
 
         os.makedirs(data_dir, exist_ok=True)
         os.chdir(data_dir)
-        project_name = "appdb" if app else "rootdb"
+        if not project_name:
+            project_name = "appdb" if app else "rootdb"
+
         try:
             # have to run in a subprocess instead of using call_command
             # due to the settings file being cached upon the first
             # invocation of call_command
-            subprocess.run(["django-admin", "startproject", project_name])
-        except CommandError:
-            print("You have already initialized Fractal Database on your machine.")
+            subprocess.run(["django-admin", "startproject", project_name], check=True, quiet=True)  # type: ignore
+        except Exception:
+            print(
+                f'You have already initialized the Fractal Database project "{project_name}" on your machine.'
+            )
             exit(1)
 
+        suffix = f'PROJECT_NAME="{project_name}"'
         # add fractal_database to INSTALLED_APPS
         if app:
-            to_write = (
-                f"INSTALLED_APPS += ['{app}', 'fractal_database_matrix', 'fractal_database']\n"
-            )
+            to_write = f"INSTALLED_APPS += ['{app}', 'fractal_database_matrix', 'fractal_database']\n{suffix}\n"
         else:
-            to_write = "INSTALLED_APPS += ['fractal_database_matrix', 'fractal_database']\n"
+            to_write = (
+                f"INSTALLED_APPS += ['fractal_database_matrix', 'fractal_database']\n{suffix}\n"
+            )
 
-        file_path = "appdb/appdb/settings.py" if app else "rootdb/rootdb/settings.py"
-        with open(file_path, "a") as f:
+        with open(f"{project_name}/{project_name}/settings.py", "a") as f:
             f.write(to_write)
 
-        sys.path.append(os.path.join(FRACTAL_DATA_DIR, "rootdb"))
+        sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         django.setup()
 

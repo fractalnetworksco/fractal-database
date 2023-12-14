@@ -7,6 +7,7 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
+from fractal_database.utils import get_project_name
 
 logger = logging.getLogger("django")
 
@@ -166,7 +167,7 @@ def create_project_database(*args, **kwargs) -> None:
     """
     from fractal_database.models import RootDatabase
 
-    project_name = os.path.basename(settings.BASE_DIR)
+    project_name = get_project_name()
     logger.info('Creating Fractal Database for Django project "%s"' % project_name)
     RootDatabase.objects.get_or_create(name=project_name, defaults={"name": project_name})
 
@@ -182,7 +183,7 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
     homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
     # TODO move access_token to a non-replicated model
     access_token = os.environ["MATRIX_ACCESS_TOKEN"]
-    project_name = os.path.basename(settings.BASE_DIR)
+    project_name = get_project_name()
     database = RootDatabase.objects.get(name=project_name)
 
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
