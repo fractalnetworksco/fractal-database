@@ -201,15 +201,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         # generate and apply initial migrations
         if not no_migrate:
-            sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
-            os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
-            django.setup()
-
-            os.chdir(project_name)
-
-            call_command("makemigrations")
-            call_command("migrate")
-
+            self.migrate(project_name)
         try:
             projects, _ = read_user_data("projects.yaml")
         except FileNotFoundError:
@@ -220,6 +212,31 @@ class FractalDatabaseController(AuthenticatedController):
 
         print(f"Successfully initialized Fractal Database project {data_dir}/{app or 'rootdb'}")
 
+    @auth_required
+    @cli_method
+    def migrate(self, project_name: str):
+        """
+        Creates and applies database migrations for the given Fractal Database Django
+        project
+
+        ---
+        Args:
+            project_name: The name of the project to migrate.
+        """
+        # FIXME: maybe AuthenticatedController should auto set these?
+        os.environ["MATRIX_HOMESERVER_URL"] = self.homeserver_url
+        os.environ["MATRIX_ACCESS_TOKEN"] = self.access_token
+
+        sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
+        os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
+        django.setup()
+
+        os.chdir(project_name)
+
+        call_command("makemigrations")
+        call_command("migrate")
+
+    @use_django
     @cli_method
     def startapp(self, db_name: str):
         """
@@ -421,6 +438,7 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
             quiet=False,
             decode=True,
             nocache=True,
+            labels={"database.fractal": "true"},
         )
         for line in response:
             if "stream" in line:
