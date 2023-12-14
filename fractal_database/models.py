@@ -53,7 +53,7 @@ class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
     # {"<target_type": { repr_metadata }}
     # Stores a map of representation data associated with each of the model's replication targets
-    # for example, a model that replicated to a MatrixReplicationTarget will store its associated
+    # for example, a model that replicated to a MatrixRootReplicationTarget will store its associated
     # Matrix room_id in this property
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
     # track subclasses

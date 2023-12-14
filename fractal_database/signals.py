@@ -174,10 +174,10 @@ def create_project_database(*args, **kwargs) -> None:
 
 def create_matrix_replication_target(*args, **kwargs) -> None:
     """
-    Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
+    Runs on post_migrate signal to setup the MatrixRootReplicationTarget for the Django project
     """
     from fractal_database.models import RootDatabase
-    from fractal_database_matrix.models import MatrixReplicationTarget
+    from fractal_database_matrix.models import MatrixRootReplicationTarget
 
     # make sure the appropriate matrix env vars are set
     homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
@@ -186,8 +186,8 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
     project_name = get_project_name()
     database = RootDatabase.objects.get(name=project_name)
 
-    logger.info("Creating MatrixReplicationTarget for database %s" % database)
-    target, created = MatrixReplicationTarget.objects.get_or_create(
+    logger.info("Creating MatrixRootReplicationTarget for database %s" % database)
+    target, created = MatrixRootReplicationTarget.objects.get_or_create(
         name="matrix",
         defaults={
             "name": "matrix",

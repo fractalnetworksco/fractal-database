@@ -21,6 +21,7 @@ from fractal.matrix import MatrixClient
 from fractal.matrix.utils import parse_matrix_id
 from fractal_database.utils import use_django
 from nio import TransferMonitor
+from taskiq.receiver.receiver import Receiver
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
@@ -51,6 +52,29 @@ class FractalDatabaseController(AuthenticatedController):
     async def _upload_file(self, file: str, monitor: Optional[TransferMonitor] = None) -> str:
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
             return await client.upload_file(file, monitor=monitor)
+
+    async def _sync_data(self, room_id: str) -> None:
+        from fractal_database_matrix.broker import broker
+
+        # FIXME: create_filter should be moved onto the FractalAsyncClient
+        from taskiq_matrix.filters import create_filter
+
+        broker._init_queues(room_id)
+
+        print(f"Queue task : {broker.replication_queue.task_types.task}")
+
+        task_filter = create_filter(room_id, types=[broker.replication_queue.task_types.task])
+        broker.replication_queue.checkpoint.since_token = None
+        tasks = await broker.replication_queue.get_tasks(
+            timeout=0, since_token=None, task_filter=task_filter
+        )
+        print(f"Got tasks: {tasks}")
+        # broker.result_backend.room = room_id
+
+        receiver = Receiver(broker=broker)
+        for task in tasks:
+            ackable_task = await broker.replication_queue.yield_task(task, ignore_acks=True)
+            await receiver.callback(ackable_task)
 
     # async def _download_file(
     #     self, mxc_uri: str, save_path: os.PathLike, monitor: Optional[TransferMonitor] = None
@@ -223,10 +247,6 @@ class FractalDatabaseController(AuthenticatedController):
         Args:
             project_name: The name of the project to migrate.
         """
-        # FIXME: maybe AuthenticatedController should auto set these?
-        os.environ["MATRIX_HOMESERVER_URL"] = self.homeserver_url
-        os.environ["MATRIX_ACCESS_TOKEN"] = self.access_token
-
         sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         django.setup()
@@ -566,6 +586,22 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
     #         exit(1)
 
     #     print(f"Successfully uploaded {file} to {content_uri}")
+
+    @use_django
+    @auth_required
+    @cli_method
+    def sync(self, room_id: str):
+        """
+        Syncs replication tasks from the epoch of a given room.
+
+        ---
+        Args:
+            room_id: The room ID to sync from.
+        """
+        os.environ["MATRIX_ROOM_ID"] = room_id
+        from fractal_database.replication.tasks import replicate_fixture
+
+        asyncio.run(self._sync_data(room_id))
 
     @use_django
     @cli_method
