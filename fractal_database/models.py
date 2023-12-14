@@ -1,24 +1,30 @@
 import logging
 from importlib import import_module
-from typing import Callable, List, Optional
+from typing import Callable, List
 from uuid import uuid4
 
 from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.serializers import serialize
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.manager import BaseManager
 from fractal_database.exceptions import StaleObjectException
-from fractal_database_matrix.representations import MatrixSpace
+
+# TODO shouldn't be importing fractal_database_matrix stuff here
+# figure out a way to register representations on remote models from
+# fractal_database_matrix
+from fractal_database_matrix.representations import MatrixRoom
 
 from .fields import SingletonField
 from .signals import defer_replication
 
-logger = logging.getLogger("django")
+logger = logging.getLogger(__name__)
+# to get console output from logger:
+# logger = logging.getLogger("django")
 
 
 class BaseModel(models.Model):
@@ -96,27 +102,24 @@ class ReplicatedModel(BaseModel):
                 return self.schedule_replication(created=created)
 
         print("Inside ReplicatedModel.schedule_replication()")
-        if isinstance(self, Database) or isinstance(self, RootDatabase):
+        if isinstance(self, AppInstance) or isinstance(self, RootDatabase):
             database = self
         else:
             try:
                 root_database_model = apps.get_model("fractal_database", "RootDatabase")
                 database = root_database_model.objects.get()
             except RootDatabase.DoesNotExist:
-                app_database_model = apps.get_model("fractal_database", "AppDatabase")
+                app_database_model = apps.get_model("fractal_database", "AppInstance")
                 database = app_database_model.objects.get()
 
         # TODO replication targets to implement their own serialization strategy
-        targets = database.get_all_replication_targets()
+        targets = database.get_all_replication_targets()  # type: ignore
         repr_logs = None
         for target in targets:
-            # target = parent_target.target
             # pass this replicated model instance to the target's replication method
             if created:
-                # FIXME: this method name is really confusing
                 repr_logs = target.create_representation_logs(self)
             else:
-                # reper_log = target.create_update_representation_logs(self)
                 print("Not creating repr for object: ", self)
 
             print(f"Creating replication log for target {target}")
@@ -219,6 +222,13 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
+    async def store_metadata(self, metadata: dict) -> None:
+        """
+        Store the Matrix room_id on target
+        """
+        self.metadata["room_id"] = metadata["room_id"]
+        await self.asave()
+
     def create_representation_logs(self, instance):
         """
         Create the representation logs (tasks) for creating a Matrix space
@@ -275,8 +285,6 @@ class RepresentationLog(BaseModel):
     target_type = models.ForeignKey(
         ContentType,
         on_delete=models.CASCADE,
-        blank=True,
-        null=True,
         related_name="%(app_label)s_%(class)s_target_type",
     )
     target_id = models.CharField(max_length=255)
@@ -286,8 +294,6 @@ class RepresentationLog(BaseModel):
     content_type = models.ForeignKey(
         ContentType,
         on_delete=models.CASCADE,
-        blank=True,
-        null=True,
         related_name="%(app_label)s_%(class)s_content_type",
     )
     metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
@@ -302,10 +308,13 @@ class RepresentationLog(BaseModel):
         repr_class = getattr(repr_module, repr_class)
         return getattr(repr_class, repr_method)
 
-    async def apply(self):
-        repr_method = self._import_method(self.method)
-        print("Calling ReplicationLog's repr_log method: ", repr_method)
-        await repr_method(self, self.target_id)  # type: ignore
+    async def apply(self) -> None:
+        create_representation = self._import_method(self.method)
+        print("Calling ReplicationLog's create_representation method: ", create_representation)
+        metadata = await create_representation(self, self.target_id)  # type: ignore
+        model: models.Model = self.content_type.model_class()  # type: ignore
+        instance = await model.objects.aget(uuid=self.object_id)
+        await instance.store_metadata(metadata)  # type: ignore
         await self.aupdate(deleted=True)
 
 
@@ -317,10 +326,7 @@ class DummyReplicationTarget(ReplicationTarget):
         pass
 
 
-class Database(ReplicatedModel, MatrixSpace):
-    # TODO shouldn't be importing fractal_database_matrix stuff here
-    # figure out a way to register representations on remote models from
-    # fractal_database_matrix
+class Database(ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
 
@@ -330,7 +336,7 @@ class Database(ReplicatedModel, MatrixSpace):
     def __str__(self) -> str:
         return self.name
 
-    def get_all_replication_targets(self) -> List[Optional[ReplicationTarget]]:
+    def get_all_replication_targets(self) -> List[ReplicationTarget]:
         targets = []
         for subclass in ReplicationTarget.__subclasses__():
             targets.extend(
@@ -338,13 +344,67 @@ class Database(ReplicatedModel, MatrixSpace):
             )
         return targets
 
+    async def aget_all_replication_targets(self) -> List[ReplicationTarget]:
+        targets = []
+        for subclass in ReplicationTarget.__subclasses__():
+            async for t in subclass.objects.filter(object_id=self.uuid).select_related(
+                "content_type"
+            ):
+                targets.append(t)
+        return targets
 
-class AppDatabase(Database):
-    pass
+
+class App(ReplicatedModel, MatrixRoom):
+    """
+    created when doing `fractal publish`
+    """
+
+    name = models.CharField(max_length=255)
+    # can be used to install app with `fractal install <app_id>`
+    # figure out how to enforce type safety on this field
+    # this field should only be set when creating the representation for an App
+    app_ids = models.JSONField(default=list)
+    git_url = models.URLField()
+    checksum = models.CharField(max_length=255)
+
+    async def store_metadata(self, metadata: dict) -> None:
+        self.app_ids.append(metadata["room_id"])
+        await self.asave()
+
+    def clean(self):
+        """
+        Custom validation for the app_ids field
+        """
+        if not isinstance(self.app_ids, list):
+            raise ValidationError({"App.app_ids": "This field must be a list."})
+
+    def save(self, *args, **kwargs):
+        # ensure app_ids is a list
+        self.clean()
+        super().save(*args, **kwargs)
 
 
-class RootDatabase(Database, MatrixSpace):
+class AppInstance(Database):
+    """
+    created when doing `fractal install`
+    """
+
+    app_instance_id = models.CharField(max_length=255, unique=True)
+    app = models.ForeignKey(App, on_delete=models.DO_NOTHING)
+    devices = models.ManyToManyField("fractal_database.Device")
+
+
+class Device(ReplicatedModel):
+    device_id = models.CharField(max_length=255, unique=True)
+
+
+class RootDatabase(Database):
+    """
+    created when doing `fractal init`
+    """
+
     root = SingletonField()
+    devices = models.ManyToManyField("fractal_database.Device")
 
     class Meta:
         # enforce that only one root=True RootDatabase can exist per RootDatabase

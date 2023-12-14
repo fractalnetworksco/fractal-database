@@ -44,7 +44,10 @@ def commit(target: "ReplicationTarget") -> None:
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
     print("Inside signals: commit")
-    async_to_sync(target.replicate)()
+    try:
+        async_to_sync(target.replicate)()
+    except Exception as e:
+        logger.error(f"Error replicating {target}: {e}")
     clear_deferred_replications(target.name)
 
 
@@ -128,19 +131,18 @@ def object_post_save(
         logger.info(f"Outermost post save instance: {instance}")
 
         from fractal_database.models import (
-            AppDatabase,
-            Database,
+            AppInstance,
             DummyReplicationTarget,
             RootDatabase,
         )
 
-        if isinstance(instance, RootDatabase) or isinstance(instance, Database):
+        if isinstance(instance, RootDatabase) or isinstance(instance, AppInstance):
             database = instance
         else:
             try:
                 database = RootDatabase.objects.get()
             except RootDatabase.DoesNotExist:
-                database = AppDatabase.objects.get()
+                database = AppInstance.objects.get()
 
         # create a dummy replication target if none exists so we can replicate when a real target is added
         # if not database.replicationtarget_set.exists():  # type: ignore
@@ -194,3 +196,4 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
             "access_token": access_token,
         },
     )
+    database.schedule_replication()
