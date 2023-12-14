@@ -113,16 +113,13 @@ class ReplicatedModel(BaseModel):
                 database = app_database_model.objects.get()
 
         # TODO replication targets to implement their own serialization strategy
-        targets = database.get_all_replication_targets()
+        targets = database.get_all_replication_targets()  # type: ignore
         repr_logs = None
         for target in targets:
-            # target = parent_target.target
             # pass this replicated model instance to the target's replication method
             if created:
-                # FIXME: this method name is really confusing
                 repr_logs = target.create_representation_logs(self)
             else:
-                # reper_log = target.create_update_representation_logs(self)
                 print("Not creating repr for object: ", self)
 
             print(f"Creating replication log for target {target}")
