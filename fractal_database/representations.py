@@ -1,7 +1,22 @@
-from typing import TYPE_CHECKING, Set
+from typing import TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
     from fractal_database.models import ReplicatedModel, ReplicationTarget
+
+
+def get_nested_attr(obj, attr_path):
+    """
+    Recursively get nested attributes of an object.
+
+    :param obj: The object from which attributes are fetched.
+    :param attr_path: String path of nested attributes separated by dots.
+    :return: Value of the nested attribute.
+    """
+    if "." in attr_path:
+        head, rest = attr_path.split(".", 1)
+        return get_nested_attr(getattr(obj, head), rest)
+    else:
+        return getattr(obj, attr_path)
 
 
 class Representation:
@@ -39,15 +54,20 @@ class Representation:
 
     @classmethod
     def create_representation_logs(
-        cls, instance: "ReplicatedModel", target: "ReplicationTarget", metadata_props: Set[str]
+        cls,
+        instance: "ReplicatedModel",
+        target: "ReplicationTarget",
+        metadata_props: Dict[str, str],
     ):
         """
         Create the representation logs (tasks) for creating a Matrix space
         """
         from fractal_database.models import RepresentationLog
 
-        # comment me
-        metadata = {prop: getattr(instance, prop) for prop in metadata_props}
+        metadata = {
+            prop_name: get_nested_attr(instance, prop)
+            for prop_name, prop in metadata_props.items()
+        }
 
         return [
             RepresentationLog.objects.create(

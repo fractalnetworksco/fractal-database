@@ -3,16 +3,18 @@ import importlib
 import os
 import subprocess
 import sys
+import time
 from functools import partial
 from sys import exit
 from typing import Any, Dict, Optional
 
+import django
 import docker
 import docker.api.build
 import toml
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from fractal.cli import cli_method
+from fractal.cli import FRACTAL_DATA_DIR, cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
 from fractal.cli.utils import data_dir
 from fractal.matrix import MatrixClient
@@ -163,11 +165,12 @@ class FractalDatabaseController(AuthenticatedController):
 
         os.makedirs(data_dir, exist_ok=True)
         os.chdir(data_dir)
+        project_name = "appdb" if app else "rootdb"
         try:
-            if app:
-                call_command("startproject", "appdb")
-            else:
-                call_command("startproject", "rootdb")
+            # have to run in a subprocess instead of using call_command
+            # due to the settings file being cached upon the first
+            # invocation of call_command
+            subprocess.run(["django-admin", "startproject", project_name])
         except CommandError:
             print("You have already initialized Fractal Database on your machine.")
             exit(1)
@@ -183,6 +186,16 @@ class FractalDatabaseController(AuthenticatedController):
         file_path = "appdb/appdb/settings.py" if app else "rootdb/rootdb/settings.py"
         with open(file_path, "a") as f:
             f.write(to_write)
+
+        sys.path.append(os.path.join(FRACTAL_DATA_DIR, "rootdb"))
+        os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
+        django.setup()
+
+        os.chdir(project_name)
+
+        # generate and apply initial migrations
+        call_command("makemigrations")
+        call_command("migrate")
 
         print(f"Successfully initialized Fractal Database project {data_dir}/{app or 'rootdb'}")
 
