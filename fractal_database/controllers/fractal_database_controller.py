@@ -16,7 +16,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from fractal.cli import FRACTAL_DATA_DIR, cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
-from fractal.cli.utils import data_dir
+from fractal.cli.utils import data_dir, read_user_data, write_user_data
 from fractal.matrix import MatrixClient
 from fractal.matrix.utils import parse_matrix_id
 from fractal_database.utils import use_django
@@ -147,7 +147,9 @@ class FractalDatabaseController(AuthenticatedController):
         print(f"Successfully joined {room_id}")
 
     @cli_method
-    def init(self, app: Optional[str] = None, project_name: Optional[str] = None):
+    def init(
+        self, app: Optional[str] = None, project_name: Optional[str] = None, quiet: bool = False
+    ):
         """
         Starts a new Fractal Database project for this machine.
         Located in ~/.local/share/fractal/rootdb
@@ -155,7 +157,7 @@ class FractalDatabaseController(AuthenticatedController):
         Args:
             app: The name of the database to start. If not provided, a root database is started.
             project_name: The name of the project to start. Defaults to app name if app is provided,
-
+            quiet: Whether or not to print verbose output.
         """
         if app:
             try:
@@ -173,7 +175,7 @@ class FractalDatabaseController(AuthenticatedController):
             # have to run in a subprocess instead of using call_command
             # due to the settings file being cached upon the first
             # invocation of call_command
-            subprocess.run(["django-admin", "startproject", project_name], check=True, quiet=True)  # type: ignore
+            subprocess.run(["django-admin", "startproject", project_name], check=True)  # type: ignore
         except Exception:
             print(
                 f'You have already initialized the Fractal Database project "{project_name}" on your machine.'
@@ -202,9 +204,16 @@ class FractalDatabaseController(AuthenticatedController):
         call_command("makemigrations")
         call_command("migrate")
 
+        try:
+            projects, _ = read_user_data("projects.yaml")
+        except FileNotFoundError:
+            projects = {}
+
+        projects[project_name] = {"name": project_name}
+        write_user_data(projects, "projects.yaml")
+
         print(f"Successfully initialized Fractal Database project {data_dir}/{app or 'rootdb'}")
 
-    @use_django
     @cli_method
     def startapp(self, db_name: str):
         """
@@ -391,7 +400,7 @@ RUN mkdir /code
 COPY . /code
 RUN pip install /code
 
-RUN fractal db init --app {name}
+RUN fractal db init --app {name} --project-name {name}
 """
         # FIXME: Have to monkey patch in order to build from in-memory Dockerfiles correctly
         docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
@@ -412,9 +421,10 @@ RUN fractal db init --app {name}
                     print(line["stream"], end="")
         return image_tag
 
+    @use_django
     @auth_required
     @cli_method
-    def deploy(self, verbose: bool = False):
+    def deploy(self, verbose: bool = False, project_name=None):
         """
         Builds a given database into a Docker container and exports it as a tarball, and
         uploads it to the Fractal Matrix server.
@@ -423,6 +433,7 @@ RUN fractal db init --app {name}
         ---
         Args:
             verbose: Whether or not to print verbose output.
+            project_name: The name of the project to deploy. Defaults to the project name in settings.py.
 
         """
         path = "."
