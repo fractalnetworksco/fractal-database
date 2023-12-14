@@ -1,6 +1,6 @@
 import logging
 from importlib import import_module
-from typing import Callable, List, Optional
+from typing import Callable, List
 from uuid import uuid4
 
 from asgiref.sync import sync_to_async
@@ -17,7 +17,7 @@ from fractal_database.exceptions import StaleObjectException
 # TODO shouldn't be importing fractal_database_matrix stuff here
 # figure out a way to register representations on remote models from
 # fractal_database_matrix
-from fractal_database_matrix.representations import MatrixRoom, MatrixSpace
+from fractal_database_matrix.representations import MatrixRoom
 
 from .fields import SingletonField
 from .signals import defer_replication
@@ -317,13 +317,7 @@ class RepresentationLog(BaseModel):
         metadata = await create_representation(self, self.target_id)  # type: ignore
         model: models.Model = self.content_type.model_class()  # type: ignore
         instance = await model.objects.aget(uuid=self.object_id)
-        if isinstance(instance, Database):
-            # fetch target and call store metadata on target
-            target = await self.target_type.model_class().objects.aget(uuid=self.target_id)  # type: ignore
-            await target.store_metadata(metadata)  # type: ignore
-        else:
-            await instance.store_metadata(metadata)  # type: ignore
-
+        await instance.store_metadata(metadata)  # type: ignore
         await self.aupdate(deleted=True)
 
 
@@ -381,18 +375,19 @@ class App(ReplicatedModel, MatrixRoom):
         await self.asave()
 
     def clean(self):
-        # Custom validation to ensure my_field is a list
+        """
+        Custom validation for the app_ids field
+        """
         if not isinstance(self.app_ids, list):
             raise ValidationError({"App.app_ids": "This field must be a list."})
 
     def save(self, *args, **kwargs):
-        # Call the custom validation
+        # ensure app_ids is a list
         self.clean()
-        # Call the original save method
         super().save(*args, **kwargs)
 
 
-class AppInstance(Database, MatrixSpace):
+class AppInstance(Database):
     """
     created when doing `fractal install`
     """
@@ -406,7 +401,7 @@ class Device(ReplicatedModel):
     device_id = models.CharField(max_length=255, unique=True)
 
 
-class RootDatabase(Database, MatrixSpace):
+class RootDatabase(Database):
     """
     created when doing `fractal init`
     """
