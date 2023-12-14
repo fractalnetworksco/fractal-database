@@ -148,7 +148,11 @@ class FractalDatabaseController(AuthenticatedController):
 
     @cli_method
     def init(
-        self, app: Optional[str] = None, project_name: Optional[str] = None, quiet: bool = False
+        self,
+        app: Optional[str] = None,
+        project_name: Optional[str] = None,
+        quiet: bool = False,
+        no_migrate: bool = False,
     ):
         """
         Starts a new Fractal Database project for this machine.
@@ -158,6 +162,7 @@ class FractalDatabaseController(AuthenticatedController):
             app: The name of the database to start. If not provided, a root database is started.
             project_name: The name of the project to start. Defaults to app name if app is provided,
             quiet: Whether or not to print verbose output.
+            no_migrate: Whether or not to skip initial migrations.
         """
         if app:
             try:
@@ -194,15 +199,16 @@ class FractalDatabaseController(AuthenticatedController):
         with open(f"{project_name}/{project_name}/settings.py", "a") as f:
             f.write(to_write)
 
-        sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
-        os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
-        django.setup()
-
-        os.chdir(project_name)
-
         # generate and apply initial migrations
-        call_command("makemigrations")
-        call_command("migrate")
+        if not no_migrate:
+            sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
+            os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
+            django.setup()
+
+            os.chdir(project_name)
+
+            call_command("makemigrations")
+            call_command("migrate")
 
         try:
             projects, _ = read_user_data("projects.yaml")
@@ -223,6 +229,7 @@ class FractalDatabaseController(AuthenticatedController):
             db_name: The name of the database to start.
 
         """
+        db_name = db_name.lower()
         print(f"Creating Fractal Database Django app for {db_name}...")
         try:
             os.mkdir(db_name)
@@ -400,7 +407,7 @@ RUN mkdir /code
 COPY . /code
 RUN pip install /code
 
-RUN fractal db init --app {name} --project-name {name}
+RUN fractal db init --app {name} --project-name {name}_app --no-migrate
 """
         # FIXME: Have to monkey patch in order to build from in-memory Dockerfiles correctly
         docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
@@ -421,10 +428,9 @@ RUN fractal db init --app {name} --project-name {name}
                     print(line["stream"], end="")
         return image_tag
 
-    @use_django
     @auth_required
     @cli_method
-    def deploy(self, verbose: bool = False, project_name=None):
+    def deploy(self, verbose: bool = False):
         """
         Builds a given database into a Docker container and exports it as a tarball, and
         uploads it to the Fractal Matrix server.
@@ -433,7 +439,6 @@ RUN fractal db init --app {name} --project-name {name}
         ---
         Args:
             verbose: Whether or not to print verbose output.
-            project_name: The name of the project to deploy. Defaults to the project name in settings.py.
 
         """
         path = "."
@@ -459,11 +464,11 @@ RUN fractal db init --app {name} --project-name {name}
             print(f"Failed to extract image: {e}")
             exit(1)
 
-        return self.upload(f"{name}.tar", quiet=verbose)
+        return self.upload(f"{name}.tar", verbose=verbose)
 
     @auth_required
     @cli_method
-    def upload(self, file: str, quiet: bool = False):
+    def upload(self, file: str, verbose: bool = False):
         """
         Builds a given database into a Docker container and exports it as a tarball, and
         uploads it to the Fractal Matrix server.
@@ -472,7 +477,7 @@ RUN fractal db init --app {name} --project-name {name}
         ---
         Args:
             file: The tarball file to upload.
-            quiet: Whether or not to print verbose output (Progress bar).
+            verbose: Whether or not to print verbose output (Progress bar).
 
         """
         try:
@@ -482,7 +487,7 @@ RUN fractal db init --app {name} --project-name {name}
             exit(1)
 
         monitor = None
-        if not quiet:
+        if verbose:
             monitor = TransferMonitor(total_size=file_size)
             progress_bar = partial(
                 self._print_file_progress,
