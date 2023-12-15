@@ -57,24 +57,29 @@ class FractalDatabaseController(AuthenticatedController):
         from fractal_database_matrix.broker import broker
 
         # FIXME: create_filter should be moved onto the FractalAsyncClient
-        from taskiq_matrix.filters import create_filter
+        from taskiq_matrix.filters import create_room_message_filter
 
         broker._init_queues(room_id)
 
-        print(f"Queue task : {broker.replication_queue.task_types.task}")
-
-        task_filter = create_filter(room_id, types=[broker.replication_queue.task_types.task])
         broker.replication_queue.checkpoint.since_token = None
-        tasks = await broker.replication_queue.get_tasks(
-            timeout=0, since_token=None, task_filter=task_filter
-        )
-        print(f"Got tasks: {tasks}")
-        # broker.result_backend.room = room_id
-
+        broker.result_backend.room = room_id
         receiver = Receiver(broker=broker)
-        for task in tasks:
-            ackable_task = await broker.replication_queue.yield_task(task, ignore_acks=True)
-            await receiver.callback(ackable_task)
+
+        while True:
+            task_filter = create_room_message_filter(
+                room_id, types=[broker.replication_queue.task_types.task]
+            )
+            tasks = await broker.replication_queue.get_tasks(timeout=0, task_filter=task_filter)
+            if not tasks:
+                print("No more tasks")
+                break
+
+            # keep syncing until we get no more tasks
+            print(f"Got {len(tasks)} tasks")
+
+            for task in tasks:
+                ackable_task = await broker.replication_queue.yield_task(task, ignore_acks=True)
+                await receiver.callback(ackable_task)
 
     # async def _download_file(
     #     self, mxc_uri: str, save_path: os.PathLike, monitor: Optional[TransferMonitor] = None
