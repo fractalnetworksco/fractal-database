@@ -44,12 +44,14 @@ def commit(target: "ReplicationTarget") -> None:
     """
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
-    print("Inside signals: commit")
     try:
-        async_to_sync(target.replicate)()
-    except Exception as e:
-        logger.error(f"Error replicating {target}: {e}")
-    clear_deferred_replications(target.name)
+        print("Inside signals: commit")
+        try:
+            async_to_sync(target.replicate)()
+        except Exception as e:
+            logger.error(f"Error replicating {target}: {e}")
+    finally:
+        clear_deferred_replications(target.name)
 
 
 def defer_replication(target: "ReplicationTarget") -> None:
@@ -109,7 +111,7 @@ def object_post_save(
     """
     Schedule replication for a ReplicatedModel instance
     """
-    print("In post save")
+    logger.debug("In post save")
     if raw:
         logger.info(f"Loading instance from fixture: {instance}")
         return None

@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import json
 import os
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from fractal.matrix.utils import parse_matrix_id
 from fractal_database.utils import use_django
 from nio import TransferMonitor
 from taskiq.receiver.receiver import Receiver
+from taskiq.result_backends.dummy import DummyResultBackend
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
@@ -41,9 +43,9 @@ class FractalDatabaseController(AuthenticatedController):
 
     PLUGIN_NAME = "db"
 
-    async def _invite_user(self, user_id: str, room_id: str) -> None:
+    async def _invite_user(self, user_id: str, room_id: str, admin: bool) -> None:
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
-            await client.invite(user_id, room_id)
+            await client.invite(user_id, room_id, admin=admin)
 
     async def _join_room(self, room_id: str) -> None:
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
@@ -62,7 +64,8 @@ class FractalDatabaseController(AuthenticatedController):
         broker._init_queues(room_id)
 
         broker.replication_queue.checkpoint.since_token = None
-        broker.result_backend.room = room_id
+        # dont need results for syncing tasks
+        broker.result_backend = DummyResultBackend()
         receiver = Receiver(broker=broker)
 
         while True:
@@ -70,16 +73,40 @@ class FractalDatabaseController(AuthenticatedController):
                 room_id, types=[broker.replication_queue.task_types.task]
             )
             tasks = await broker.replication_queue.get_tasks(timeout=0, task_filter=task_filter)
+            print(f"Got tasks: {len(tasks)}")
             if not tasks:
                 print("No more tasks")
                 break
 
+            # merge all replicated tasks into a single "merged" task
+            # this prevents us from having to run each individual task
+            merged_task = None
+            fixture = []
+
+            # FIXME: this assumes that all of the tasks received are the
+            # same task. Should probably handle specifically the replicate_fixture
+            # task.
+            for task in tasks:
+                if not merged_task:
+                    merged_task = task
+
+                data = json.loads(task.data["args"][0])
+                for item in data:
+                    fixture.append(item)
+
+            merged_task.data["args"][0] = json.dumps(fixture)
+
             # keep syncing until we get no more tasks
             print(f"Got {len(tasks)} tasks")
+            with open("tmp-fixture.json", "a") as f:
+                f.write(json.dumps(fixture, indent=4))
 
-            for task in tasks:
-                ackable_task = await broker.replication_queue.yield_task(task, ignore_acks=True)
-                await receiver.callback(ackable_task)
+            ackable_task = await broker.replication_queue.yield_task(
+                merged_task, ignore_acks=True, lock=False
+            )
+            await receiver.callback(ackable_task)
+
+            # for task in tasks:
 
     # async def _download_file(
     #     self, mxc_uri: str, save_path: os.PathLike, monitor: Optional[TransferMonitor] = None
@@ -156,7 +183,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         # verify that provided user_id is a valid matrix id
         parse_matrix_id(user_id)[0]
-        asyncio.run(self._invite_user(user_id, room_id))
+        asyncio.run(self._invite_user(user_id, room_id, admin))
 
         print(f"Successfully invited {user_id} to {room_id}")
 
@@ -260,6 +287,24 @@ class FractalDatabaseController(AuthenticatedController):
 
         call_command("makemigrations")
         call_command("migrate")
+
+    @auth_required
+    @cli_method
+    def shell(self, project_name: str):
+        """
+        Exec into a Django loaded shell for the given Fractal Database Django project.
+
+        ---
+        Args:
+            project_name: The name of the project to shell into.
+        """
+        sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
+        os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
+        django.setup()
+
+        os.chdir(project_name)
+
+        call_command("shell")
 
     @use_django
     @cli_method
