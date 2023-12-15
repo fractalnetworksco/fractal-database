@@ -298,20 +298,19 @@ class RepresentationLog(BaseModel):
     )
     metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
 
-    def _import_method(self, method: str) -> Callable:
+    def _get_repr_instance(self, method: str) -> Callable:
         """
         Imports and returns the provided method.
         """
-        repr_class, repr_method = method.split(":")
-        repr_module, repr_class = repr_class.rsplit(".", 1)
+        repr_module, repr_class = method.rsplit(".", 1)
         repr_module = import_module(repr_module)
         repr_class = getattr(repr_module, repr_class)
-        return getattr(repr_class, repr_method)
+        return repr_class()
 
     async def apply(self) -> None:
-        create_representation = self._import_method(self.method)
-        print("Calling ReplicationLog's create_representation method: ", create_representation)
-        metadata = await create_representation(self, self.target_id)  # type: ignore
+        repr_instance = self._get_repr_instance(self.method)
+        print("Calling create_representation method on: ", repr_instance)
+        metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
         model: models.Model = self.content_type.model_class()  # type: ignore
         instance = await model.objects.aget(uuid=self.object_id)
         await instance.store_metadata(metadata)  # type: ignore
