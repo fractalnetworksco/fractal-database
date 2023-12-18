@@ -102,13 +102,10 @@ class ReplicatedModel(BaseModel):
                 return self.schedule_replication(created=created)
 
         print("Inside ReplicatedModel.schedule_replication()")
-        if isinstance(self, Database):
-            database = self
-        else:
-            try:
-                database = Database.objects.get(is_self=True)
-            except Database.DoesNotExist as e:
-                raise Exception("No is_self=True database found in schedule_replication()") from e
+        try:
+            database = Database.objects.get(is_self=True)
+        except Database.DoesNotExist as e:
+            raise Exception("No is_self=True database found in schedule_replication()") from e
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         repr_logs = None
