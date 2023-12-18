@@ -18,7 +18,7 @@ from django.core.management.base import CommandError
 from fractal.cli import FRACTAL_DATA_DIR, cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
 from fractal.cli.utils import data_dir, read_user_data, write_user_data
-from fractal.matrix import MatrixClient
+from fractal.matrix import FractalAsyncClient, MatrixClient
 from fractal.matrix.utils import parse_matrix_id
 from fractal_database.utils import use_django
 from nio import TransferMonitor
@@ -290,21 +290,53 @@ class FractalDatabaseController(AuthenticatedController):
 
     @auth_required
     @cli_method
-    def shell(self, project_name: str):
+    def shell(self):
         """
         Exec into a Django loaded shell for the given Fractal Database Django project.
 
         ---
         Args:
-            project_name: The name of the project to shell into.
         """
-        sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
-        os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
-        django.setup()
+        # sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
+        # os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
+        # django.setup()
 
-        os.chdir(project_name)
+        # os.chdir(project_name)
+        # TODO customize prompt based on current context
+        # TODO autoload models
+        init_shell = """import os
+import IPython
+from IPython.terminal.ipapp import load_default_config
+import asyncio
+import atexit
+from IPython.terminal.prompts import Prompts, Token
+class CustomPrompt(Prompts):
+    def in_prompt_tokens(self, cli=None):
+        return [(Token.Prompt, '[fractal_db]# ')]
+    def out_prompt_tokens(self):
+        return super().out_prompt_tokens()
+from fractal.matrix import FractalAsyncClient
+hs_url = os.environ["MATRIX_HOMESERVER_URL"]
+access_token = os.environ["MATRIX_ACCESS_TOKEN"]
+client = FractalAsyncClient(hs_url, access_token)
+def cleanup():
+    print("Your data. Your future.")
+    asyncio.run(client.close())
+atexit.register(cleanup)
+context = {"c": client}
+config = load_default_config()
+config.TerminalInteractiveShell.prompts_class = CustomPrompt
+config.TerminalInteractiveShell.banner1 = \"""
+Fractal Database Shell
 
-        call_command("shell")
+This is a standard IPython shell.
+An authenticated Matrix client is available at the local variable `c`.
+
+The future is in your hands, act accordingly.
+\"""
+IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
+"""
+        call_command("shell", "--force-color", "-c", init_shell)
 
     @use_django
     @cli_method
