@@ -1,6 +1,4 @@
-import json
 import logging
-import os
 from importlib import import_module
 from typing import Any, Callable, Dict, List
 from uuid import uuid4
@@ -15,13 +13,11 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.manager import BaseManager
 from fractal_database.exceptions import StaleObjectException
-from fractal_database.replication.tasks import replicate_fixture
 
 # TODO shouldn't be importing fractal_database_matrix stuff here
 # figure out a way to register representations on remote models from
 # fractal_database_matrix
 from fractal_database_matrix.representations import MatrixRoom
-from taskiq import SendTaskError
 
 from .fields import SingletonField
 from .signals import defer_replication
