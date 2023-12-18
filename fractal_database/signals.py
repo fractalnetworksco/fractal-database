@@ -150,7 +150,7 @@ def create_project_database(*args, **kwargs) -> None:
     project_name = get_project_name()
     logger.info('Creating Fractal Database for Django project "%s"' % project_name)
 
-    parent_repr_id = os.environ.get("PARENT_REPR_ID")
+    parent_repr_id = os.environ.get("MATRIX_PARENT_SPACE_ID")
     Database.objects.get_or_create(
         name=project_name,
         is_self=True,

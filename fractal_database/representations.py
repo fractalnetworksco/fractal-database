@@ -58,15 +58,11 @@ class Representation:
         instance: "ReplicatedModel",
         target: "ReplicationTarget",
         metadata_props: Dict[str, str],
-        repr_cls=None,
     ):
         """
         Create the representation logs (tasks) for creating a Matrix space
         """
         from fractal_database.models import RepresentationLog
-
-        if repr_cls:
-            cls = repr_cls
 
         metadata = {
             prop_name: get_nested_attr(instance, prop)
