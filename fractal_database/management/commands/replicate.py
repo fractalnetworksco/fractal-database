@@ -3,7 +3,7 @@ import sys
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
-from fractal_database.models import AppInstance, RootDatabase
+from fractal_database.models import Database
 from fractal_database_matrix.models import MatrixRootReplicationTarget
 
 
@@ -17,10 +17,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if not os.environ.get("MATRIX_ROOM_ID"):
             try:
-                try:
-                    database = RootDatabase.objects.get()
-                except RootDatabase.DoesNotExist:
-                    database = AppInstance.objects.get()
+                database = Database.objects.get(self=True)
             except ObjectDoesNotExist:
                 raise CommandError("No database configured. Have you applied migrations?")
 

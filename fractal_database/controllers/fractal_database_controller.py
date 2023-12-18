@@ -693,9 +693,9 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
         ---
         Args:
         """
-        from fractal_database.models import AppInstance
+        from fractal_database.models import Database
 
-        apps = AppInstance.objects.all()
+        apps = Database.objects.all()
         print(apps)
 
     list_apps.clicz_aliases = ["ls"]

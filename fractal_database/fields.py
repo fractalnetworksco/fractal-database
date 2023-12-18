@@ -7,16 +7,6 @@ class SingletonField(models.BooleanField):
     ie models that should only have one instance in the database.
     """
 
-    enabled = False
-
-    def __init__(self, *args, **kwargs):
-        # Always set default to True
-        kwargs["default"] = True
-        kwargs["unique"] = True
-        self.enabled = True
-
-        super().__init__(*args, **kwargs)
-
     def pre_save(self, model_instance, add):
         value = super().pre_save(model_instance, add)
         if self.enabled:
