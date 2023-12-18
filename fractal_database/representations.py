@@ -68,7 +68,7 @@ class Representation:
             prop_name: get_nested_attr(instance, prop)
             for prop_name, prop in metadata_props.items()
         }
-
+        print("Creating representation log for", cls)
         return [
             RepresentationLog.objects.create(
                 instance=instance, method=cls.repr_method, target=target, metadata=metadata

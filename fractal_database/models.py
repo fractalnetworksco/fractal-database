@@ -1,6 +1,6 @@
 import logging
 from importlib import import_module
-from typing import Callable, List
+from typing import Any, Callable, Dict, List
 from uuid import uuid4
 
 from asgiref.sync import sync_to_async
@@ -102,16 +102,10 @@ class ReplicatedModel(BaseModel):
                 return self.schedule_replication(created=created)
 
         print("Inside ReplicatedModel.schedule_replication()")
-        if isinstance(self, AppInstance) or isinstance(self, RootDatabase):
-            database = self
-        else:
-            try:
-                root_database_model = apps.get_model("fractal_database", "RootDatabase")
-                database = root_database_model.objects.get()
-            except RootDatabase.DoesNotExist:
-                app_database_model = apps.get_model("fractal_database", "AppInstance")
-                database = app_database_model.objects.get()
-
+        try:
+            database = Database.objects.get(is_self=True)
+        except Database.DoesNotExist as e:
+            raise Exception("No is_self=True database found in schedule_replication()") from e
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         repr_logs = None
@@ -222,6 +216,56 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
+    # TODO move these to a replicationtargetcredentials model that point back to the target
+    access_token = models.CharField(max_length=255, blank=True, null=True)
+    homeserver = models.CharField(max_length=255, blank=True, null=True)
+
+    async def push_replication_log(self, fixture: List[Dict[str, Any]]) -> None:
+        """
+        Pushes a replication log to the replication target as a replicate. Uses taskiq
+        to "kick" a replication task that all devices in the object's
+        configured room will load.
+        """
+        raise NotImplementedError()
+
+    async def replicate(self) -> None:
+        """
+        Get the pending replication logs and their associated representation logs.
+
+        Apply the representation logs then push the replication logs.
+        """
+        transaction_logs_querysets = await self.get_repl_logs_by_txn()
+
+        # collect all of the payloads from the replication logs into a single array
+        for queryset in transaction_logs_querysets:
+            fixture = []
+            logger.debug("Querying for representation logs...")
+            async for log in queryset:
+                async for repr_log in log.repr_logs.select_related(
+                    "content_type", "target_type"
+                ).filter(deleted=False).order_by("date_created"):
+                    try:
+                        await repr_log.apply()
+                        # after applying a representation for this target,
+                        # we need to refresh ourself to get any latest metadata
+                        if repr_log.content_type.model_class() == self.__class__:
+                            logger.info(f"Refreshing {self} after applying representation")
+                            await self.arefresh_from_db()
+                        # call replicate again since apply will create new
+                        # replication logs
+                        return await self.replicate()
+                    except Exception as e:
+                        logger.error(f"Error applying representation log: {e}")
+                        continue
+                fixture.append(log.payload[0])
+
+            try:
+                await self.push_replication_log(fixture)
+                # bulk update all of the logs in the queryset to deleted
+                await queryset.aupdate(deleted=True)
+            except Exception as e:
+                logger.error(f"Error pushing replication log: {e}")
+
     async def store_metadata(self, metadata: dict) -> None:
         """
         Store the Matrix room_id on target
@@ -241,9 +285,7 @@ class ReplicationTarget(ReplicatedModel):
         for repr_type in repr_types:
             print(f"Creating repr {repr_types} logs for instance {instance} on target {self}")
             metadata_props = repr_type.get_repr_metadata_properties()
-            repr_logs.append(
-                *repr_type.create_representation_logs(instance, self, metadata_props)
-            )
+            repr_logs.extend(repr_type.create_representation_logs(instance, self, metadata_props))
 
         return repr_logs
 
@@ -272,9 +314,6 @@ class ReplicationTarget(ReplicatedModel):
             # We can now safely get the child object by using the content_type field
             return getattr(self, self.content_type.model)
         return None
-
-    async def replicate(self):
-        raise NotImplementedError()
 
     def __str__(self) -> str:
         return f"{self.name}"
@@ -311,9 +350,10 @@ class RepresentationLog(BaseModel):
         repr_instance = self._get_repr_instance(self.method)
         print("Calling create_representation method on: ", repr_instance)
         metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
-        model: models.Model = self.content_type.model_class()  # type: ignore
-        instance = await model.objects.aget(uuid=self.object_id)
-        await instance.store_metadata(metadata)  # type: ignore
+        if metadata:
+            model: models.Model = self.content_type.model_class()  # type: ignore
+            instance = await model.objects.aget(uuid=self.object_id)
+            await instance.store_metadata(metadata)  # type: ignore
         await self.aupdate(deleted=True)
 
 
@@ -328,15 +368,26 @@ class DummyReplicationTarget(ReplicationTarget):
 class Database(ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-
-    class Meta:
-        abstract = True
+    is_self = models.BooleanField(default=False)
+    devices = models.ManyToManyField("fractal_database.Device")
+    parent_repr_id = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self) -> str:
         return self.name
 
+    class Meta:
+        # enforce that only one self=True Database can exist per project
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_self"],
+                condition=models.Q(is_self=True),
+                name="%(app_label)s_%(class)s_unique_self_singleton",
+            )
+        ]
+
     def get_all_replication_targets(self) -> List[ReplicationTarget]:
         targets = []
+        # this is a hack, for some reason we arent able to set abstract = True on a subclass of an already abstract model
         for subclass in ReplicationTarget.__subclasses__():
             targets.extend(
                 subclass.objects.filter(object_id=self.uuid).select_related("content_type")
@@ -353,7 +404,7 @@ class Database(ReplicatedModel):
         return targets
 
 
-class App(ReplicatedModel, MatrixRoom):
+class AppMetadata(ReplicatedModel, MatrixRoom):
     """
     created when doing `fractal publish`
     """
@@ -383,37 +434,18 @@ class App(ReplicatedModel, MatrixRoom):
         super().save(*args, **kwargs)
 
 
-class AppInstance(Database):
+class App(ReplicatedModel):
     """
     created when doing `fractal install`
     """
 
     app_instance_id = models.CharField(max_length=255, unique=True)
-    app = models.ForeignKey(App, on_delete=models.DO_NOTHING)
+    metadata = models.ForeignKey(AppMetadata, on_delete=models.DO_NOTHING)
     devices = models.ManyToManyField("fractal_database.Device")
 
 
 class Device(ReplicatedModel):
     device_id = models.CharField(max_length=255, unique=True)
-
-
-class RootDatabase(Database):
-    """
-    created when doing `fractal init`
-    """
-
-    root = SingletonField()
-    devices = models.ManyToManyField("fractal_database.Device")
-
-    class Meta:
-        # enforce that only one root=True RootDatabase can exist per RootDatabase
-        constraints = [
-            models.UniqueConstraint(
-                fields=["root"],
-                condition=models.Q(root=True),
-                name="unique_root_database_singleton",
-            )
-        ]
 
 
 class Snapshot(ReplicatedModel):

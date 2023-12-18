@@ -133,28 +133,6 @@ def object_post_save(
 
         logger.info(f"Outermost post save instance: {instance}")
 
-        from fractal_database.models import (
-            AppInstance,
-            DummyReplicationTarget,
-            RootDatabase,
-        )
-
-        if isinstance(instance, RootDatabase) or isinstance(instance, AppInstance):
-            database = instance
-        else:
-            try:
-                database = RootDatabase.objects.get()
-            except RootDatabase.DoesNotExist:
-                database = AppInstance.objects.get()
-
-        # create a dummy replication target if none exists so we can replicate when a real target is added
-        # if not database.replicationtarget_set.exists():  # type: ignore
-        if not database.get_all_replication_targets():
-            DummyReplicationTarget.objects.create(
-                name="dummy",
-                database=database,
-                primary=False,
-            )
         # create replication log entry for this instance
         logger.info(f"Calling schedule replication on {instance}")
         instance.schedule_replication(created=created)
@@ -167,36 +145,77 @@ def create_project_database(*args, **kwargs) -> None:
     """
     Runs on post_migrate signal to create the Fractal Database for the Django project
     """
-    from fractal_database.models import RootDatabase
+    from fractal_database.models import Database
 
     project_name = get_project_name()
     logger.info('Creating Fractal Database for Django project "%s"' % project_name)
-    RootDatabase.objects.get_or_create(name=project_name, defaults={"name": project_name})
+
+    parent_repr_id = os.environ.get("MATRIX_PARENT_SPACE_ID")
+    Database.objects.get_or_create(
+        name=project_name,
+        is_self=True,
+        parent_repr_id=parent_repr_id,
+        defaults={"name": project_name, "is_self": True, "parent_repr_id": parent_repr_id},
+    )
 
 
 def create_matrix_replication_target(*args, **kwargs) -> None:
     """
     Runs on post_migrate signal to setup the MatrixRootReplicationTarget for the Django project
     """
-    from fractal_database.models import RootDatabase
-    from fractal_database_matrix.models import MatrixRootReplicationTarget
+    from fractal_database.models import Database
+    from fractal_database_matrix.models import (
+        MatrixNestedReplicationTarget,
+        MatrixRootReplicationTarget,
+    )
 
+    if not os.environ.get("MATRIX_HOMESERVER_URL") or not os.environ.get("MATRIX_ACCESS_TOKEN"):
+        logger.info(
+            "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixRootReplicationTarget creation"
+        )
+        return
     # make sure the appropriate matrix env vars are set
     homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
     # TODO move access_token to a non-replicated model
     access_token = os.environ["MATRIX_ACCESS_TOKEN"]
     project_name = get_project_name()
-    database = RootDatabase.objects.get(name=project_name)
+    database = Database.objects.get(is_self=True, name=project_name)
 
-    logger.info("Creating MatrixRootReplicationTarget for database %s" % database)
-    target, created = MatrixRootReplicationTarget.objects.get_or_create(
-        name="matrix",
-        defaults={
-            "name": "matrix",
-            "primary": True,
-            "database": database,
-            "homeserver": homeserver_url,
-            "access_token": access_token,
-        },
-    )
+    logger.info("Creating MatrixNestedReplicationTarget for database %s" % database)
+    if database.parent_repr_id:
+        target, created = MatrixNestedReplicationTarget.objects.get_or_create(
+            name="matrix",
+            defaults={
+                "name": "matrix",
+                "primary": True,
+                "database": database,
+                "homeserver": homeserver_url,
+                "access_token": access_token,
+            },
+        )
+    else:
+        target, created = MatrixRootReplicationTarget.objects.get_or_create(
+            name="matrix",
+            defaults={
+                "name": "matrix",
+                "primary": True,
+                "database": database,
+                "homeserver": homeserver_url,
+                "access_token": access_token,
+            },
+        )
     database.schedule_replication()
+
+
+def ensure_replication_target(*args, **kwargs) -> None:
+    from fractal_database.models import Database, DummyReplicationTarget
+
+    database = Database.objects.get(is_self=True)
+    # create a dummy replication target if none exists so we can replicate when a real target is added
+
+    if not database.get_all_replication_targets():
+        DummyReplicationTarget.objects.create(
+            name="dummy",
+            database=database,
+            primary=False,
+        )
