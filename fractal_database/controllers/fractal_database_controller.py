@@ -337,9 +337,6 @@ class FractalDatabaseController(AuthenticatedController):
         Args:
             project_name: The name of the project to migrate.
         """
-        import pdb
-
-        pdb.set_trace()
         sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         django.setup()
