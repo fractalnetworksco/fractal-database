@@ -4,7 +4,7 @@ import sys
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
 from fractal_database.models import Database
-from fractal_database_matrix.models import MatrixRootReplicationTarget
+from fractal_database_matrix.models import MatrixReplicationTarget
 
 
 class Command(BaseCommand):
@@ -22,7 +22,7 @@ class Command(BaseCommand):
                 raise CommandError("No database configured. Have you applied migrations?")
 
             # FIXME: Handle multiple replication targets. For now just using
-            # MatrixRootReplicationTarget
+            # MatrixReplicationTarget
             target = database.primary_target
             access_token = target.access_token
             homeserver_url = target.homeserver
@@ -34,7 +34,7 @@ class Command(BaseCommand):
                 homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
             except KeyError as e:
                 raise CommandError(
-                    f"Missing environment variable {e}. Have you configured the MatrixRootReplicationTarget?"
+                    f"Missing environment variable {e}. Have you configured the MatrixReplicationTarget?"
                 ) from e
 
         settings_module = os.environ.get("DJANGO_SETTINGS_MODULE")

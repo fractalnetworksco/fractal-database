@@ -1,6 +1,6 @@
 import logging
 from importlib import import_module
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from asgiref.sync import sync_to_async
@@ -13,6 +13,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.manager import BaseManager
 from fractal_database.exceptions import StaleObjectException
+from fractal_database.representations import Representation
 
 # TODO shouldn't be importing fractal_database_matrix stuff here
 # figure out a way to register representations on remote models from
@@ -53,12 +54,12 @@ class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
     # {"<target_type": { repr_metadata }}
     # Stores a map of representation data associated with each of the model's replication targets
-    # for example, a model that replicated to a MatrixRootReplicationTarget will store its associated
+    # for example, a model that replicated to a MatrixReplicationTarget will store its associated
     # Matrix room_id in this property
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
-    # track subclasses
+    representation_module = models.CharField(max_length=255, blank=True, null=True)
+
     models = []
-    repr_models = []
 
     class Meta:
         abstract = True
@@ -95,6 +96,18 @@ class ReplicatedModel(BaseModel):
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
 
+    def _get_repr_instance(self) -> Optional[Representation]:
+        """
+        Imports and returns the provided method.
+        """
+        if not self.representation_module:
+            return None
+
+        repr_module, repr_class = self.representation_module.rsplit(".", 1)
+        repr_module = import_module(repr_module)
+        repr_class = getattr(repr_module, repr_class)
+        return repr_class()
+
     def schedule_replication(self, created: bool = False):
         # must be in a txn for defer_replication to work properly
         if not transaction.get_connection().in_atomic_block:
@@ -109,6 +122,9 @@ class ReplicatedModel(BaseModel):
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         repr_logs = None
+        # import pdb
+
+        # pdb.set_trace()
         for target in targets:
             # pass this replicated model instance to the target's replication method
             if created:
@@ -183,23 +199,11 @@ class ReplicationTarget(ReplicatedModel):
     solely on Matrix's federation) would lend itself to a more scalable decentralized replication model.
     """
 
-    name = models.CharField(max_length=255, unique=True)
+    name = models.CharField(max_length=255)
     enabled = models.BooleanField(default=True)
-    database = GenericForeignKey()
-    content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.CASCADE,
-        blank=True,
-        null=True,
-        related_name="%(app_label)s_%(class)s_content_type",
-    )
-    object_id = models.CharField(max_length=255)
+    database = models.ForeignKey("fractal_database.Database", on_delete=models.CASCADE)
     # replication events are only consumed from the primary target for a database
     primary = models.BooleanField(default=False)
-    # This field will store the content type of the subclass
-    # content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    # # This is the generic foreign key to the subclass
-    # content_object = GenericForeignKey("content_type", "uuid")
     # metadata is a map of properties that are specific to the target
     metadata = models.JSONField(default=dict)
 
@@ -210,7 +214,7 @@ class ReplicationTarget(ReplicatedModel):
         abstract = True
         constraints = [
             models.UniqueConstraint(
-                fields=["content_type"],
+                fields=["database"],
                 condition=models.Q(primary=True),
                 name="%(app_label)s_%(class)s_unique_primary_per_database",
             )
@@ -273,20 +277,18 @@ class ReplicationTarget(ReplicatedModel):
         self.metadata["room_id"] = metadata["room_id"]
         await self.asave()
 
-    def create_representation_logs(self, instance):
+    def create_representation_logs(self, instance: "ReplicatedModel"):
         """
         Create the representation logs (tasks) for creating a Matrix space
         """
-        if not hasattr(instance, "get_repr_types"):
+        repr_logs = []
+        repr_type = instance._get_repr_instance()
+        if not repr_type:
             return []
 
-        repr_logs = []
-        repr_types = instance.get_repr_types()
-        for repr_type in repr_types:
-            print(f"Creating repr {repr_types} logs for instance {instance} on target {self}")
-            metadata_props = repr_type.get_repr_metadata_properties()
-            repr_logs.extend(repr_type.create_representation_logs(instance, self, metadata_props))
-
+        print(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
+        metadata_props = repr_type.get_repr_metadata_properties()
+        repr_logs.extend(repr_type.create_representation_logs(instance, self, metadata_props))
         return repr_logs
 
     def save(self, *args, **kwargs):
@@ -328,7 +330,7 @@ class RepresentationLog(BaseModel):
     )
     target_id = models.CharField(max_length=255)
     method = models.CharField(max_length=255)
-    instance = GenericForeignKey()
+    instance: "ReplicatedModel" = GenericForeignKey()  # type: ignore
     object_id = models.CharField(max_length=255)
     content_type = models.ForeignKey(
         ContentType,
@@ -337,22 +339,13 @@ class RepresentationLog(BaseModel):
     )
     metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
 
-    def _get_repr_instance(self, method: str) -> Callable:
-        """
-        Imports and returns the provided method.
-        """
-        repr_module, repr_class = method.rsplit(".", 1)
-        repr_module = import_module(repr_module)
-        repr_class = getattr(repr_module, repr_class)
-        return repr_class()
-
     async def apply(self) -> None:
-        repr_instance = self._get_repr_instance(self.method)
+        model: models.Model = self.content_type.model_class()  # type: ignore
+        instance = await model.objects.aget(uuid=self.object_id)
+        repr_instance = instance._get_repr_instance()
         print("Calling create_representation method on: ", repr_instance)
         metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
         if metadata:
-            model: models.Model = self.content_type.model_class()  # type: ignore
-            instance = await model.objects.aget(uuid=self.object_id)
             await instance.store_metadata(metadata)  # type: ignore
         await self.aupdate(deleted=True)
 
@@ -399,17 +392,13 @@ class Database(ReplicatedModel):
         targets = []
         # this is a hack, for some reason we arent able to set abstract = True on a subclass of an already abstract model
         for subclass in ReplicationTarget.__subclasses__():
-            targets.extend(
-                subclass.objects.filter(object_id=self.uuid).select_related("content_type")
-            )
+            targets.extend(subclass.objects.filter(database=self).select_related("database"))
         return targets
 
     async def aget_all_replication_targets(self) -> List[ReplicationTarget]:
         targets = []
         for subclass in ReplicationTarget.__subclasses__():
-            async for t in subclass.objects.filter(object_id=self.uuid).select_related(
-                "content_type"
-            ):
+            async for t in subclass.objects.filter(database=self).select_related("database"):
                 targets.append(t)
         return targets
 

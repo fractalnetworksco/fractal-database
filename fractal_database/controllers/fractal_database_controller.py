@@ -7,7 +7,7 @@ import sys
 import time
 from functools import partial
 from sys import exit
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import django
 import docker
@@ -21,9 +21,10 @@ from fractal.cli.utils import data_dir, read_user_data, write_user_data
 from fractal.matrix import FractalAsyncClient, MatrixClient
 from fractal.matrix.utils import parse_matrix_id
 from fractal_database.utils import use_django
-from nio import TransferMonitor
+from nio import RoomGetStateEventError, TransferMonitor
 from taskiq.receiver.receiver import Receiver
 from taskiq.result_backends.dummy import DummyResultBackend
+from taskiq_matrix.matrix_queue import Task
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
@@ -55,17 +56,57 @@ class FractalDatabaseController(AuthenticatedController):
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
             return await client.upload_file(file, monitor=monitor)
 
+    @use_django
+    async def _sync_database_metadata(self, room_id: str, **kwargs) -> None:
+        async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
+            fixture = []
+            res = await client.room_get_state_event(room_id, "f.database")
+            if isinstance(res, RoomGetStateEventError):
+                raise Exception(res.message)
+            try:
+                database_fixture = json.loads(res.content["fixture"])[0]
+                # since we're syncing in a database after initializing
+                # we need to set is_self to False since we already have a
+                # database
+                if database_fixture["fields"]["is_self"]:
+                    database_fixture["fields"]["is_self"] = False
+            except Exception as e:
+                raise Exception(f"Failed to parse database fixture: {e}")
+            fixture.append(database_fixture)
+
+            res = await client.room_get_state_event(room_id, "f.database.target")
+            if isinstance(res, RoomGetStateEventError):
+                raise Exception(res.message)
+            try:
+                target_fixture = json.loads(res.content["fixture"])[0]
+            except Exception as e:
+                raise Exception(f"Failed to parse target fixture: {e}")
+
+            fixture.append(target_fixture)
+
+        from fractal_database.replication.tasks import replicate_fixture
+
+        try:
+            await replicate_fixture(json.dumps(fixture))
+        except Exception as e:
+            raise Exception(f"Failed to load fixture: {e}")
+
+        # TODO: Handle publishing a users homeserver as a target for the
+        # synced in database
+
+        return None
+
     async def _sync_data(self, room_id: str) -> None:
         from fractal_database_matrix.broker import broker
 
         # FIXME: create_filter should be moved onto the FractalAsyncClient
         from taskiq_matrix.filters import create_room_message_filter
 
-        broker._init_queues(room_id)
+        broker._init_queues()
 
         broker.replication_queue.checkpoint.since_token = None
         # dont need results for syncing tasks
-        broker.result_backend = DummyResultBackend()
+        broker.result_backend = DummyResultBackend()  # type: ignore
         receiver = Receiver(broker=broker)
 
         while True:
@@ -80,7 +121,7 @@ class FractalDatabaseController(AuthenticatedController):
 
             # merge all replicated tasks into a single "merged" task
             # this prevents us from having to run each individual task
-            merged_task = None
+            merged_task: Optional[Task] = None
             fixture = []
 
             # FIXME: this assumes that all of the tasks received are the
@@ -105,8 +146,6 @@ class FractalDatabaseController(AuthenticatedController):
                 merged_task, ignore_acks=True, lock=False
             )
             await receiver.callback(ackable_task)
-
-            # for task in tasks:
 
     # async def _download_file(
     #     self, mxc_uri: str, save_path: os.PathLike, monitor: Optional[TransferMonitor] = None
@@ -189,7 +228,7 @@ class FractalDatabaseController(AuthenticatedController):
 
     @auth_required
     @cli_method
-    def join(self, room_id: str):
+    def join(self, room_id: str, **kwargs):
         """
         Accept an invitation to a database or knock if not invited yet.
         ---
@@ -200,6 +239,16 @@ class FractalDatabaseController(AuthenticatedController):
         # TODO: When joining fails and the reason is that the user isn't invited,
         # handle knocking on the room
         asyncio.run(self._join_room(room_id))
+
+        project_name = os.environ.get("FRACTAL_PROJECT_NAME", "fractal_database")
+
+        # ensure project database exists and is migrated (FIXME: maybe not migrate... dunno)
+        print(f"Verifying project database {project_name} is initialized...")
+        self.init(project_name=project_name, exist_ok=True)
+
+        # sync primary replication target from room state
+        asyncio.run(self._sync_database_metadata(room_id))
+
         print(f"Successfully joined {room_id}")
 
     @cli_method
@@ -209,6 +258,7 @@ class FractalDatabaseController(AuthenticatedController):
         project_name: Optional[str] = None,
         quiet: bool = False,
         no_migrate: bool = False,
+        exist_ok: bool = False,
     ):
         """
         Starts a new Fractal Database project for this machine.
@@ -219,6 +269,7 @@ class FractalDatabaseController(AuthenticatedController):
             project_name: The name of the project to start. Defaults to app name if app is provided,
             quiet: Whether or not to print verbose output.
             no_migrate: Whether or not to skip initial migrations.
+            exist_ok: Dont return error exit code if project already exists.
         """
         if app:
             try:
@@ -228,19 +279,26 @@ class FractalDatabaseController(AuthenticatedController):
                 exit(1)
 
         os.makedirs(data_dir, exist_ok=True)
+
         os.chdir(data_dir)
         if not project_name:
-            project_name = "appdb" if app else "rootdb"
+            project_name = "appdb" if app else "fractal_database"
+
+        if os.path.exists(f"{data_dir}/{project_name}"):
+            if not exist_ok:
+                print(
+                    f'You have already initialized the Fractal Database project "{project_name}" on your machine.'
+                )
+                exit(1)
+            return None
 
         try:
             # have to run in a subprocess instead of using call_command
             # due to the settings file being cached upon the first
             # invocation of call_command
             subprocess.run(["django-admin", "startproject", project_name], check=True)  # type: ignore
-        except Exception:
-            print(
-                f'You have already initialized the Fractal Database project "{project_name}" on your machine.'
-            )
+        except Exception as e:
+            print(f'Error creating project "{project_name}" on your machine: {e}')
             exit(1)
 
         suffix = f'PROJECT_NAME="{project_name}"'
@@ -279,6 +337,9 @@ class FractalDatabaseController(AuthenticatedController):
         Args:
             project_name: The name of the project to migrate.
         """
+        import pdb
+
+        pdb.set_trace()
         sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         django.setup()

@@ -155,55 +155,58 @@ def create_project_database(*args, **kwargs) -> None:
         name=project_name,
         is_self=True,
         parent_repr_id=parent_repr_id,
-        defaults={"name": project_name, "is_self": True, "parent_repr_id": parent_repr_id},
+        defaults={
+            "name": project_name,
+            "is_self": True,
+            "parent_repr_id": parent_repr_id,
+        },
     )
 
 
 def create_matrix_replication_target(*args, **kwargs) -> None:
     """
-    Runs on post_migrate signal to setup the MatrixRootReplicationTarget for the Django project
+    Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
     """
+    from fractal.cli.controllers.authenticated import AuthenticatedController
     from fractal_database.models import Database
-    from fractal_database_matrix.models import (
-        MatrixNestedReplicationTarget,
-        MatrixRootReplicationTarget,
-    )
+    from fractal_database_matrix.models import MatrixReplicationTarget
 
-    if not os.environ.get("MATRIX_HOMESERVER_URL") or not os.environ.get("MATRIX_ACCESS_TOKEN"):
-        logger.info(
-            "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixRootReplicationTarget creation"
-        )
-        return
-    # make sure the appropriate matrix env vars are set
-    homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
-    # TODO move access_token to a non-replicated model
-    access_token = os.environ["MATRIX_ACCESS_TOKEN"]
+    creds = AuthenticatedController.get_creds()
+    if creds:
+        access_token, homeserver_url = creds
+    else:
+        if not os.environ.get("MATRIX_HOMESERVER_URL") or not os.environ.get(
+            "MATRIX_ACCESS_TOKEN"
+        ):
+            logger.info(
+                "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixReplicationTarget creation"
+            )
+            return
+        # make sure the appropriate matrix env vars are set
+        homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
+        # TODO move access_token to a non-replicated model
+        access_token = os.environ["MATRIX_ACCESS_TOKEN"]
+
     project_name = get_project_name()
     database = Database.objects.get(is_self=True, name=project_name)
 
-    logger.info("Creating MatrixNestedReplicationTarget for database %s" % database)
     if database.parent_repr_id:
-        target, created = MatrixNestedReplicationTarget.objects.get_or_create(
-            name="matrix",
-            defaults={
-                "name": "matrix",
-                "primary": True,
-                "database": database,
-                "homeserver": homeserver_url,
-                "access_token": access_token,
-            },
-        )
+        representation_module = "fractal_database_matrix.representations.MatrixSubSpace"
     else:
-        target, created = MatrixRootReplicationTarget.objects.get_or_create(
-            name="matrix",
-            defaults={
-                "name": "matrix",
-                "primary": True,
-                "database": database,
-                "homeserver": homeserver_url,
-                "access_token": access_token,
-            },
-        )
+        representation_module = "fractal_database_matrix.representations.MatrixSpace"
+
+    logger.info("Creating MatrixReplicationTarget for database %s" % database)
+    target, created = MatrixReplicationTarget.objects.get_or_create(
+        name="matrix",
+        defaults={
+            "name": "matrix",
+            "primary": True,
+            "database": database,
+            "homeserver": homeserver_url,
+            "access_token": access_token,
+            "representation_module": representation_module,
+        },
+    )
     database.schedule_replication()
 
 
