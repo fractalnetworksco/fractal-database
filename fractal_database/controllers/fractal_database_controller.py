@@ -288,14 +288,16 @@ class FractalDatabaseController(AuthenticatedController):
         call_command("makemigrations")
         call_command("migrate")
 
+    @use_django
     @auth_required
     @cli_method
-    def shell(self):
+    def shell(self, **kwargs):
         """
         Exec into a Django loaded shell for the given Fractal Database Django project.
 
         ---
         Args:
+            project_name: The name of the project to shell into.
         """
         # sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
         # os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
@@ -304,15 +306,21 @@ class FractalDatabaseController(AuthenticatedController):
         # os.chdir(project_name)
         # TODO customize prompt based on current context
         # TODO autoload models
-        init_shell = """import os
+        init_shell = f"""import os
 import IPython
 from IPython.terminal.ipapp import load_default_config
 import asyncio
 import atexit
 from IPython.terminal.prompts import Prompts, Token
+from django.apps import apps
+class ModelAccessor:
+    def __init__(self):
+        for app in apps.get_app_configs():
+            for model in apps.get_models(app):
+                setattr(self, model.__name__, model)
 class CustomPrompt(Prompts):
     def in_prompt_tokens(self, cli=None):
-        return [(Token.Prompt, '[fractal_db]# ')]
+        return [(Token.Prompt, '[{kwargs["project_name"]}]# ')]
     def out_prompt_tokens(self):
         return super().out_prompt_tokens()
 from fractal.matrix import FractalAsyncClient
@@ -323,7 +331,7 @@ def cleanup():
     print("Your data. Your future.")
     asyncio.run(client.close())
 atexit.register(cleanup)
-context = {"c": client}
+context = {{"c": client, "models": ModelAccessor()}}
 config = load_default_config()
 config.TerminalInteractiveShell.prompts_class = CustomPrompt
 config.TerminalInteractiveShell.banner1 = \"""
@@ -331,6 +339,7 @@ Fractal Database Shell
 
 This is a standard IPython shell.
 An authenticated Matrix client is available at the local variable `c`.
+All Django models are available at the local variable `models`.
 
 The future is in your hands, act accordingly.
 \"""
@@ -699,6 +708,16 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
         print(apps)
 
     list_apps.clicz_aliases = ["ls"]
+
+    @use_django
+    @cli_method
+    def replicate(self):
+        """
+        Start a replication process for the configured database.
+        ---
+        Args:
+        """
+        call_command("replicate")
 
 
 Controller = FractalDatabaseController

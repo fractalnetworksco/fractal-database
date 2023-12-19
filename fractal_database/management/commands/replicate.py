@@ -17,7 +17,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if not os.environ.get("MATRIX_ROOM_ID"):
             try:
-                database = Database.objects.get(self=True)
+                database = Database.objects.get(is_self=True)
             except ObjectDoesNotExist:
                 raise CommandError("No database configured. Have you applied migrations?")
 

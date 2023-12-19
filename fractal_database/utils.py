@@ -39,6 +39,7 @@ def use_django(func: Callable[..., Any]):
         sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         django.setup()
+        kwargs["project_name"] = project_name
         res = func(*args, **kwargs)
         return res
 
