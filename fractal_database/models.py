@@ -385,6 +385,16 @@ class Database(ReplicatedModel):
             )
         ]
 
+    @property
+    def primary_target(self) -> ReplicationTarget:
+        """
+        Returns the primary replication target for this database.
+        """
+        for subclass in ReplicationTarget.__subclasses__():
+            target = subclass.objects.filter(primary=True).select_related("content_type")
+            if target.exists():
+                return target[0]
+
     def get_all_replication_targets(self) -> List[ReplicationTarget]:
         targets = []
         # this is a hack, for some reason we arent able to set abstract = True on a subclass of an already abstract model

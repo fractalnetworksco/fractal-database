@@ -23,7 +23,7 @@ class Command(BaseCommand):
 
             # FIXME: Handle multiple replication targets. For now just using
             # MatrixRootReplicationTarget
-            target = MatrixRootReplicationTarget.objects.get(object_id=database.uuid)
+            target = database.primary_target
             access_token = target.access_token
             homeserver_url = target.homeserver
             room_id = target.metadata["room_id"]

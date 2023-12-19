@@ -711,7 +711,7 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
 
     @use_django
     @cli_method
-    def replicate(self):
+    def replicate(self, **kwargs):
         """
         Start a replication process for the configured database.
         ---
