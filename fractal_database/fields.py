@@ -9,7 +9,6 @@ class SingletonField(models.BooleanField):
 
     def pre_save(self, model_instance, add):
         value = super().pre_save(model_instance, add)
-        if self.enabled:
-            if value is False:
-                raise ValueError("SingletonField value must always be True.")
+        if value is False:
+            raise ValueError("SingletonField value must always be True.")
         return value

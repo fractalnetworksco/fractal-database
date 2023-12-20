@@ -65,11 +65,6 @@ class FractalDatabaseController(AuthenticatedController):
                 raise Exception(res.message)
             try:
                 database_fixture = json.loads(res.content["fixture"])[0]
-                # since we're syncing in a database after initializing
-                # we need to set is_self to False since we already have a
-                # database
-                if database_fixture["fields"]["is_self"]:
-                    database_fixture["fields"]["is_self"] = False
             except Exception as e:
                 raise Exception(f"Failed to parse database fixture: {e}")
             fixture.append(database_fixture)
@@ -282,7 +277,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         os.chdir(data_dir)
         if not project_name:
-            project_name = "appdb" if app else "fractal_database"
+            project_name = "appdb" if app else "fractaldb"
 
         if os.path.exists(f"{data_dir}/{project_name}"):
             if not exist_ok:
@@ -324,7 +319,7 @@ class FractalDatabaseController(AuthenticatedController):
         projects[project_name] = {"name": project_name}
         write_user_data(projects, "projects.yaml")
 
-        print(f"Successfully initialized Fractal Database project {data_dir}/{app or 'rootdb'}")
+        print(f"Successfully initialized Fractal Database project {data_dir}/{project_name}")
 
     @auth_required
     @cli_method

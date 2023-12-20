@@ -50,6 +50,25 @@ class BaseModel(models.Model):
         return await sync_to_async(self.save)(*args, **kwargs)
 
 
+class DatabaseConfig(BaseModel):
+    """
+    Model for storing the local database configuration.
+    """
+
+    current_db = models.ForeignKey("fractal_database.Database", on_delete=models.CASCADE)
+    singleton = SingletonField(unique=True, default=True)
+
+    class Meta:
+        # enforce that only one root=True RootDatabase can exist per RootDatabase
+        constraints = [
+            models.UniqueConstraint(
+                fields=["singleton"],
+                condition=models.Q(singleton=True),
+                name="unique_database_singleton",
+            )
+        ]
+
+
 class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
     # {"<target_type": { repr_metadata }}
@@ -57,7 +76,6 @@ class ReplicatedModel(BaseModel):
     # for example, a model that replicated to a MatrixReplicationTarget will store its associated
     # Matrix room_id in this property
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
-    representation_module = models.CharField(max_length=255, blank=True, null=True)
 
     models = []
 
@@ -100,10 +118,10 @@ class ReplicatedModel(BaseModel):
         """
         Imports and returns the provided method.
         """
-        if not self.representation_module:
+        if not hasattr(self, "representation_module"):
             return None
 
-        repr_module, repr_class = self.representation_module.rsplit(".", 1)
+        repr_module, repr_class = self.representation_module.rsplit(".", 1)  # type: ignore
         repr_module = import_module(repr_module)
         repr_class = getattr(repr_module, repr_class)
         return repr_class()
@@ -116,15 +134,13 @@ class ReplicatedModel(BaseModel):
 
         print("Inside ReplicatedModel.schedule_replication()")
         try:
-            database = Database.objects.get(is_self=True)
-        except Database.DoesNotExist as e:
-            raise Exception("No is_self=True database found in schedule_replication()") from e
+            database = DatabaseConfig.objects.get().current_db
+        except DatabaseConfig.DoesNotExist as e:
+            logger.error("Unable to get current database from schedule_replication")
+            return
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         repr_logs = None
-        # import pdb
-
-        # pdb.set_trace()
         for target in targets:
             # pass this replicated model instance to the target's replication method
             if created:
@@ -310,15 +326,15 @@ class ReplicationTarget(ReplicatedModel):
             async for txn_id in txn_ids
         ]
 
-    @property
-    def target(self):
-        if self.content_type and hasattr(self, self.content_type.model):
-            # We can now safely get the child object by using the content_type field
-            return getattr(self, self.content_type.model)
-        return None
-
     def __str__(self) -> str:
         return f"{self.name}"
+
+    @property
+    def representation_module(self) -> str:
+        """
+        Returns the representation module for this target.
+        """
+        raise NotImplementedError()
 
 
 class RepresentationLog(BaseModel):
@@ -361,22 +377,10 @@ class DummyReplicationTarget(ReplicationTarget):
 class Database(ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-    is_self = models.BooleanField(default=False)
     devices = models.ManyToManyField("fractal_database.Device")
-    parent_repr_id = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self) -> str:
         return self.name
-
-    class Meta:
-        # enforce that only one self=True Database can exist per project
-        constraints = [
-            models.UniqueConstraint(
-                fields=["is_self"],
-                condition=models.Q(is_self=True),
-                name="%(app_label)s_%(class)s_unique_self_singleton",
-            )
-        ]
 
     @property
     def primary_target(self) -> ReplicationTarget:
