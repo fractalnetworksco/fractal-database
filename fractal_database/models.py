@@ -114,18 +114,6 @@ class ReplicatedModel(BaseModel):
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
 
-    def _get_repr_instance(self) -> Optional[Representation]:
-        """
-        Imports and returns the provided method.
-        """
-        if not hasattr(self, "representation_module"):
-            return None
-
-        repr_module, repr_class = self.representation_module.rsplit(".", 1)  # type: ignore
-        repr_module = import_module(repr_module)
-        repr_class = getattr(repr_module, repr_class)
-        return repr_class()
-
     def schedule_replication(self, created: bool = False):
         # must be in a txn for defer_replication to work properly
         if not transaction.get_connection().in_atomic_block:
@@ -265,6 +253,7 @@ class ReplicationTarget(ReplicatedModel):
                     "content_type", "target_type"
                 ).filter(deleted=False).order_by("date_created"):
                     try:
+                        print("Calling apply for repr log: ", repr_log)
                         await repr_log.apply()
                         # after applying a representation for this target,
                         # we need to refresh ourself to get any latest metadata
@@ -298,7 +287,7 @@ class ReplicationTarget(ReplicatedModel):
         Create the representation logs (tasks) for creating a Matrix space
         """
         repr_logs = []
-        repr_type = instance._get_repr_instance()
+        repr_type = RepresentationLog._get_repr_instance(self.representation_module)
         if not repr_type:
             return []
 
@@ -355,10 +344,26 @@ class RepresentationLog(BaseModel):
     )
     metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
 
+    @classmethod
+    def _get_repr_instance(cls, module: Optional[str] = None) -> Optional[Representation]:
+        """
+        Imports and returns the provided method.
+        """
+        if not module:
+            if not hasattr(cls, "representation_module"):
+                return None
+            else:
+                module = cls.representation_module
+
+        repr_module, repr_class = module.rsplit(".", 1)  # type: ignore
+        repr_module = import_module(repr_module)
+        repr_class = getattr(repr_module, repr_class)
+        return repr_class()
+
     async def apply(self) -> None:
         model: models.Model = self.content_type.model_class()  # type: ignore
         instance = await model.objects.aget(uuid=self.object_id)
-        repr_instance = instance._get_repr_instance()
+        repr_instance = self._get_repr_instance(self.method)
         print("Calling create_representation method on: ", repr_instance)
         metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
         if metadata:
