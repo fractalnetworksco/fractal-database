@@ -77,6 +77,7 @@ class FractalDatabaseController(AuthenticatedController):
             except Exception as e:
                 raise Exception(f"Failed to parse target fixture: {e}")
 
+            added_target_uuid = target_fixture["fields"]["uuid"]
             fixture.append(target_fixture)
 
         from fractal_database.replication.tasks import replicate_fixture
@@ -85,6 +86,19 @@ class FractalDatabaseController(AuthenticatedController):
             await replicate_fixture(json.dumps(fixture))
         except Exception as e:
             raise Exception(f"Failed to load fixture: {e}")
+
+        from fractal_database.models import Database, RepresentationLog
+        from fractal_database_matrix.models import MatrixReplicationTarget
+
+        target = Database.current_db.primary_target
+        room_id = target.metadata["room_id"]
+        target_to_add = MatrixReplicationTarget.objects.get(uuid=added_target_uuid)
+
+        RepresentationLog.objects.create(
+            instance=target_to_add,
+            method="fractal_database_matrix.representations.MatrixSubSpace",
+            target=target,
+        )
 
         # TODO: Handle publishing a users homeserver as a target for the
         # synced in database

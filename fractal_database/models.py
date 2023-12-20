@@ -228,6 +228,34 @@ class ReplicationTarget(ReplicatedModel):
     access_token = models.CharField(max_length=255, blank=True, null=True)
     homeserver = models.CharField(max_length=255, blank=True, null=True)
 
+    @property
+    def repr_metadata_props(self) -> Dict[str, str]:
+        """
+        Returns the representation metadata properties for this target.
+        """
+        def get_nested_attr(obj, attr_path):
+            """
+            Recursively get nested attributes of an object.
+
+            :param obj: The object from which attributes are fetched.
+            :param attr_path: String path of nested attributes separated by dots.
+            :return: Value of the nested attribute.
+            """
+            if "." in attr_path:
+                head, rest = attr_path.split(".", 1)
+                return get_nested_attr(getattr(obj, head), rest)
+            else:
+                return getattr(obj, attr_path)
+
+        metadata_props = {
+            "uuid": "uuid",
+            "database.name": "name",
+        }
+        return {
+            prop_name: get_nested_attr(instance, prop)
+            for prop_name, prop in metadata_props.items()
+        }
+
     async def push_replication_log(self, fixture: List[Dict[str, Any]]) -> None:
         """
         Pushes a replication log to the replication target as a replicate. Uses taskiq
@@ -292,7 +320,7 @@ class ReplicationTarget(ReplicatedModel):
             return []
 
         print(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
-        metadata_props = repr_type.get_repr_metadata_properties()
+        metadata_props = instance.get_repr_metadata_props()
         repr_logs.extend(repr_type.create_representation_logs(instance, self, metadata_props))
         return repr_logs
 
