@@ -170,7 +170,7 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
     Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
     """
     from fractal.cli.controllers.authenticated import AuthenticatedController
-    from fractal_database.models import DatabaseConfig
+    from fractal_database.models import Database
     from fractal_database_matrix.models import MatrixReplicationTarget
 
     creds = AuthenticatedController.get_creds()
@@ -189,7 +189,7 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
         # TODO move access_token to a non-replicated model
         access_token = os.environ["MATRIX_ACCESS_TOKEN"]
 
-    database = DatabaseConfig.objects.get().current_db
+    database = Database.current_db
 
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
     target, created = MatrixReplicationTarget.objects.get_or_create(
@@ -206,9 +206,9 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
 
 
 def ensure_replication_target(*args, **kwargs) -> None:
-    from fractal_database.models import DatabaseConfig, DummyReplicationTarget
+    from fractal_database.models import Database, DummyReplicationTarget
 
-    database = DatabaseConfig.objects.get().current_db
+    database = Database.current_db
     # create a dummy replication target if none exists so we can replicate when a real target is added
 
     if not database.get_all_replication_targets():

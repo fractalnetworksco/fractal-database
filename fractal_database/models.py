@@ -134,7 +134,7 @@ class ReplicatedModel(BaseModel):
 
         print("Inside ReplicatedModel.schedule_replication()")
         try:
-            database = DatabaseConfig.objects.get().current_db
+            database = Database.current_db
         except DatabaseConfig.DoesNotExist as e:
             logger.error("Unable to get current database from schedule_replication")
             return
@@ -405,6 +405,14 @@ class Database(ReplicatedModel):
             async for t in subclass.objects.filter(database=self).select_related("database"):
                 targets.append(t)
         return targets
+
+    @classmethod
+    @property
+    def current_db(cls) -> "Database":
+        """
+        Returns the current database.
+        """
+        return DatabaseConfig.objects.get().current_db
 
 
 class AppMetadata(ReplicatedModel, MatrixRoom):
