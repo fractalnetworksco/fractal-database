@@ -101,7 +101,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         repr_log = await RepresentationLog.objects.acreate(
             instance=target_to_add,
-            method="fractal_database_matrix.representations.MatrixSubSpace",
+            method="fractal_database_matrix.representations.MatrixExistingSubSpace",
             target=target,
             metadata=metadata,
         )
@@ -755,7 +755,7 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
     @use_django
     @auth_required
     @cli_method
-    def sync(self, room_id: str):
+    def sync(self, room_id: str, **kwargs):
         """
         Syncs replication tasks from the epoch of a given room.
 
