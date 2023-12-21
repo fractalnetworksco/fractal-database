@@ -77,7 +77,7 @@ class FractalDatabaseController(AuthenticatedController):
             except Exception as e:
                 raise Exception(f"Failed to parse target fixture: {e}")
 
-            added_target_uuid = target_fixture["fields"]["uuid"]
+            added_target_uuid = target_fixture["pk"]
             fixture.append(target_fixture)
 
         from fractal_database.replication.tasks import replicate_fixture
@@ -90,15 +90,22 @@ class FractalDatabaseController(AuthenticatedController):
         from fractal_database.models import Database, RepresentationLog
         from fractal_database_matrix.models import MatrixReplicationTarget
 
-        target = Database.current_db.primary_target
+        database = await Database.acurrent_db()
+        target = await database.aprimary_target()
         room_id = target.metadata["room_id"]
-        target_to_add = MatrixReplicationTarget.objects.get(uuid=added_target_uuid)
+        target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
+            uuid=added_target_uuid
+        )
 
-        RepresentationLog.objects.create(
+        metadata = target_to_add.repr_metadata_props
+
+        repr_log = await RepresentationLog.objects.acreate(
             instance=target_to_add,
             method="fractal_database_matrix.representations.MatrixSubSpace",
             target=target,
+            metadata=metadata,
         )
+        await repr_log.apply()
 
         # TODO: Handle publishing a users homeserver as a target for the
         # synced in database
@@ -249,7 +256,7 @@ class FractalDatabaseController(AuthenticatedController):
         # handle knocking on the room
         asyncio.run(self._join_room(room_id))
 
-        project_name = os.environ.get("FRACTAL_PROJECT_NAME", "fractal_database")
+        project_name = os.environ.get("FRACTAL_PROJECT_NAME", "fractaldb")
 
         # ensure project database exists and is migrated (FIXME: maybe not migrate... dunno)
         print(f"Verifying project database {project_name} is initialized...")

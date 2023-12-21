@@ -16,13 +16,13 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if not os.environ.get("MATRIX_ROOM_ID"):
             try:
-                database = Database.current_db
+                database = Database.current_db()
             except ObjectDoesNotExist:
                 raise CommandError("No current database configured. Have you applied migrations?")
 
             # FIXME: Handle multiple replication targets. For now just using
             # MatrixReplicationTarget
-            target = database.primary_target
+            target = database.primary_target()
             access_token = target.access_token
             homeserver_url = target.homeserver
             room_id = target.metadata["room_id"]

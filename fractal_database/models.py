@@ -122,7 +122,7 @@ class ReplicatedModel(BaseModel):
 
         print("Inside ReplicatedModel.schedule_replication()")
         try:
-            database = Database.current_db
+            database = Database.current_db()
         except DatabaseConfig.DoesNotExist as e:
             logger.error("Unable to get current database from schedule_replication")
             return
@@ -233,6 +233,7 @@ class ReplicationTarget(ReplicatedModel):
         """
         Returns the representation metadata properties for this target.
         """
+
         def get_nested_attr(obj, attr_path):
             """
             Recursively get nested attributes of an object.
@@ -247,13 +248,9 @@ class ReplicationTarget(ReplicatedModel):
             else:
                 return getattr(obj, attr_path)
 
-        metadata_props = {
-            "uuid": "uuid",
-            "database.name": "name",
-        }
+        metadata_props = {"uuid": "uuid", "name": "database.name"}
         return {
-            prop_name: get_nested_attr(instance, prop)
-            for prop_name, prop in metadata_props.items()
+            prop_name: get_nested_attr(self, prop) for prop_name, prop in metadata_props.items()
         }
 
     async def push_replication_log(self, fixture: List[Dict[str, Any]]) -> None:
@@ -320,7 +317,7 @@ class ReplicationTarget(ReplicatedModel):
             return []
 
         print(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
-        metadata_props = instance.get_repr_metadata_props()
+        metadata_props = instance.repr_metadata_props
         repr_logs.extend(repr_type.create_representation_logs(instance, self, metadata_props))
         return repr_logs
 
@@ -415,15 +412,17 @@ class Database(ReplicatedModel):
     def __str__(self) -> str:
         return self.name
 
-    @property
     def primary_target(self) -> ReplicationTarget:
         """
         Returns the primary replication target for this database.
         """
         for subclass in ReplicationTarget.__subclasses__():
-            target = subclass.objects.filter(primary=True).select_related("content_type")
+            target = subclass.objects.filter(primary=True)
             if target.exists():
                 return target[0]
+
+    async def aprimary_target(self) -> ReplicationTarget:
+        return await sync_to_async(self.primary_target)()
 
     def get_all_replication_targets(self) -> List[ReplicationTarget]:
         targets = []
@@ -440,12 +439,23 @@ class Database(ReplicatedModel):
         return targets
 
     @classmethod
-    @property
     def current_db(cls) -> "Database":
         """
         Returns the current database.
         """
-        return DatabaseConfig.objects.get().current_db
+        return (
+            DatabaseConfig.objects.select_related("current_db")
+            .prefetch_related("current_db__matrixreplicationtarget_set")
+            .get()
+            .current_db
+        )
+
+    @classmethod
+    async def acurrent_db(cls) -> "Database":
+        """
+        Returns the current database.
+        """
+        return await sync_to_async(cls.current_db)()
 
 
 class AppMetadata(ReplicatedModel, MatrixRoom):
