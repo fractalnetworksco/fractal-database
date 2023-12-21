@@ -21,56 +21,25 @@ def get_nested_attr(obj, attr_path):
 
 class Representation:
     module = __name__
-    repr_method = None
-
-    def get_repr_types(self):
-        """
-        Wacky inheritance introspection stuff lies ahead.
-
-        Fractal Database ReplicatedModels that want an external representation must directly
-        subclass this class or one of its subclasses.
-
-        This method looks its parent and returns any classes from the module
-        of the class that inherits from this class.
-
-        Classes must directly subclass this class to be considered for a representation.
-
-        For example:
-
-        class MyModel(Representation):
-            pass
-
-        class MyModelSubclass(MyModel): # this wont work
-            pass
-
-        instead do this:
-
-        class MyModelSubclass(MyModel, Representation): # this will work
-            pass
-        """
-        return [
-            base for base in self.__class__.__bases__ if base.__module__.startswith(self.module)
-        ]
+    representation_module = None
 
     @classmethod
     def create_representation_logs(
         cls,
         instance: "ReplicatedModel",
         target: "ReplicationTarget",
-        metadata_props: Dict[str, str],
     ):
         """
         Create the representation logs (tasks) for creating a Matrix space
         """
         from fractal_database.models import RepresentationLog
 
-        metadata = {
-            prop_name: get_nested_attr(instance, prop)
-            for prop_name, prop in metadata_props.items()
-        }
         print("Creating representation log for", cls)
         return [
             RepresentationLog.objects.create(
-                instance=instance, method=cls.repr_method, target=target, metadata=metadata
+                instance=instance,
+                method=cls.representation_module,
+                target=target,
+                metadata=instance.repr_metadata_props(),
             )
         ]
