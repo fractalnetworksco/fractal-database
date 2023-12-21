@@ -110,18 +110,19 @@ class ReplicatedModel(BaseModel):
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
 
-    def schedule_replication(self, created: bool = False):
+    def schedule_replication(self, created: bool = False, database: Optional["Database"] = None):
         # must be in a txn for defer_replication to work properly
         if not transaction.get_connection().in_atomic_block:
             with transaction.atomic():
                 return self.schedule_replication(created=created)
 
         print("Inside ReplicatedModel.schedule_replication()")
-        try:
-            database = Database.current_db()
-        except DatabaseConfig.DoesNotExist as e:
-            logger.error("Unable to get current database from schedule_replication")
-            return
+        if not database:
+            try:
+                database = Database.current_db()
+            except DatabaseConfig.DoesNotExist as e:
+                logger.error("Unable to get current database from schedule_replication")
+                return
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         repr_logs = None
@@ -153,7 +154,7 @@ class ReplicatedModel(BaseModel):
         """
         raise NotImplementedError()
 
-    def get_representation_module(self) -> str:
+    def get_representation_module(self) -> None:
         """
         Returns the representation module for this target.
         """
@@ -236,7 +237,6 @@ class ReplicationTarget(ReplicatedModel):
     access_token = models.CharField(max_length=255, blank=True, null=True)
     homeserver = models.CharField(max_length=255, blank=True, null=True)
 
-    @property
     def repr_metadata_props(self) -> Dict[str, str]:
         """
         Returns the representation metadata properties for this target.
@@ -320,9 +320,10 @@ class ReplicationTarget(ReplicatedModel):
         Create the representation logs (tasks) for creating a Matrix space
         """
         repr_logs = []
-        repr_type = RepresentationLog._get_repr_instance(self.get_representation_module())
-        if not repr_type:
+        repr_module = instance.get_representation_module()
+        if not repr_module:
             return []
+        repr_type = RepresentationLog._get_repr_instance(repr_module)
 
         print(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
         repr_logs.extend(repr_type.create_representation_logs(instance, self))

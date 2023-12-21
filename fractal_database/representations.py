@@ -40,6 +40,6 @@ class Representation:
                 instance=instance,
                 method=cls.representation_module,
                 target=target,
-                metadata=instance.repr_metadata_props,
+                metadata=instance.repr_metadata_props(),
             )
         ]
