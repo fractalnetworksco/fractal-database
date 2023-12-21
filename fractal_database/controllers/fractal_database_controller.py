@@ -13,6 +13,7 @@ import django
 import docker
 import docker.api.build
 import toml
+from asgiref.sync import sync_to_async
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from fractal.cli import FRACTAL_DATA_DIR, cli_method
@@ -87,25 +88,20 @@ class FractalDatabaseController(AuthenticatedController):
         except Exception as e:
             raise Exception(f"Failed to load fixture: {e}")
 
-        from fractal_database.models import Database, RepresentationLog
+        from fractal_database.models import Database
         from fractal_database_matrix.models import MatrixReplicationTarget
+        from fractal_database_matrix.representations import MatrixExistingSubSpace
 
         database = await Database.acurrent_db()
         target = await database.aprimary_target()
-        room_id = target.metadata["room_id"]
         target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
             uuid=added_target_uuid
         )
-
-        metadata = target_to_add.repr_metadata_props
-
-        repr_log = await RepresentationLog.objects.acreate(
-            instance=target_to_add,
-            method="fractal_database_matrix.representations.MatrixExistingSubSpace",
-            target=target,
-            metadata=metadata,
+        repr_log = await sync_to_async(MatrixExistingSubSpace.create_representation_logs)(
+            target_to_add, target
         )
-        await repr_log.apply()
+
+        await repr_log[0].apply()
 
         # TODO: Handle publishing a users homeserver as a target for the
         # synced in database

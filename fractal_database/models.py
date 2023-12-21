@@ -71,10 +71,6 @@ class DatabaseConfig(BaseModel):
 
 class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
-    # {"<target_type": { repr_metadata }}
-    # Stores a map of representation data associated with each of the model's replication targets
-    # for example, a model that replicated to a MatrixReplicationTarget will store its associated
-    # Matrix room_id in this property
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
 
     models = []
@@ -150,6 +146,18 @@ class ReplicatedModel(BaseModel):
                 repl_log.repr_logs.add(*repr_logs)
 
             defer_replication(target)
+
+    def repr_metadata_props(self) -> Dict[str, str]:
+        """
+        Returns the representation metadata properties for this model.
+        """
+        raise NotImplementedError()
+
+    def get_representation_module(self) -> str:
+        """
+        Returns the representation module for this target.
+        """
+        return None
 
 
 class ReplicationLog(BaseModel):
@@ -312,13 +320,12 @@ class ReplicationTarget(ReplicatedModel):
         Create the representation logs (tasks) for creating a Matrix space
         """
         repr_logs = []
-        repr_type = RepresentationLog._get_repr_instance(self.representation_module)
+        repr_type = RepresentationLog._get_repr_instance(self.get_representation_module())
         if not repr_type:
             return []
 
         print(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
-        metadata_props = instance.repr_metadata_props
-        repr_logs.extend(repr_type.create_representation_logs(instance, self, metadata_props))
+        repr_logs.extend(repr_type.create_representation_logs(instance, self))
         return repr_logs
 
     def save(self, *args, **kwargs):
@@ -343,13 +350,6 @@ class ReplicationTarget(ReplicatedModel):
     def __str__(self) -> str:
         return f"{self.name}"
 
-    @property
-    def representation_module(self) -> str:
-        """
-        Returns the representation module for this target.
-        """
-        raise NotImplementedError()
-
 
 class RepresentationLog(BaseModel):
     target = GenericForeignKey("target_type", "target_id")
@@ -370,16 +370,10 @@ class RepresentationLog(BaseModel):
     metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
 
     @classmethod
-    def _get_repr_instance(cls, module: Optional[str] = None) -> Optional[Representation]:
+    def _get_repr_instance(cls, module: str) -> Optional[Representation]:
         """
         Imports and returns the provided method.
         """
-        if not module:
-            if not hasattr(cls, "representation_module"):
-                return None
-            else:
-                module = cls.representation_module
-
         repr_module, repr_class = module.rsplit(".", 1)  # type: ignore
         repr_module = import_module(repr_module)
         repr_class = getattr(repr_module, repr_class)
@@ -417,7 +411,7 @@ class Database(ReplicatedModel):
         Returns the primary replication target for this database.
         """
         for subclass in ReplicationTarget.__subclasses__():
-            target = subclass.objects.filter(primary=True)
+            target = subclass.objects.filter(database=self, primary=True)
             if target.exists():
                 return target[0]
 

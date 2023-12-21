@@ -21,14 +21,13 @@ def get_nested_attr(obj, attr_path):
 
 class Representation:
     module = __name__
-    repr_method = None
+    representation_module = None
 
     @classmethod
     def create_representation_logs(
         cls,
         instance: "ReplicatedModel",
         target: "ReplicationTarget",
-        metadata: Dict[str, str],
     ):
         """
         Create the representation logs (tasks) for creating a Matrix space
@@ -38,6 +37,9 @@ class Representation:
         print("Creating representation log for", cls)
         return [
             RepresentationLog.objects.create(
-                instance=instance, method=cls.repr_method, target=target, metadata=metadata
+                instance=instance,
+                method=cls.representation_module,
+                target=target,
+                metadata=instance.repr_metadata_props,
             )
         ]
