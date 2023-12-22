@@ -233,10 +233,6 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
-    # TODO move these to a replicationtargetcredentials model that point back to the target
-    access_token = models.CharField(max_length=255, blank=True, null=True)
-    homeserver = models.CharField(max_length=255, blank=True, null=True)
-
     def repr_metadata_props(self) -> Dict[str, str]:
         """
         Returns the representation metadata properties for this target.

@@ -17,6 +17,7 @@ import toml
 from asgiref.sync import sync_to_async
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import transaction
 from fractal.cli import FRACTAL_DATA_DIR, cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
 from fractal.cli.utils import data_dir, read_user_data, write_user_data
@@ -57,6 +58,7 @@ class FractalDatabaseController(AuthenticatedController):
                 raise Exception(res.message)
             try:
                 database_fixture = json.loads(res.content["fixture"])[0]
+                database_uuid = database_fixture["pk"]
             except Exception as e:
                 raise Exception(f"Failed to parse database fixture: {e}")
             fixture.append(database_fixture)
@@ -79,11 +81,36 @@ class FractalDatabaseController(AuthenticatedController):
         except Exception as e:
             raise Exception(f"Failed to load fixture: {e}")
 
-        from fractal_database.models import Database
-        from fractal_database_matrix.models import MatrixReplicationTarget
+        from fractal_database.models import Database, DatabaseConfig, Device
+        from fractal_database_matrix.models import (
+            MatrixCredentials,
+            MatrixReplicationTarget,
+        )
         from fractal_database_matrix.representations import MatrixExistingSubSpace
 
-        database = await Database.acurrent_db()
+        try:
+            # get the parent database
+            database = await Database.acurrent_db()
+        except DatabaseConfig.DoesNotExist:
+            # we are initializing an instance database
+            def _init_instance_database():
+                """
+                Initialize an instance database
+                """
+                with transaction.atomic():
+                    database = Database.objects.get(uuid=database_uuid)
+                    DatabaseConfig.objects.create(current_db=database)
+                    device = Device.objects.create(name=os.environ["FRACTAL_DEVICE_NAME"])
+                    MatrixCredentials.objects.create(
+                        access_token=os.environ["MATRIX_ACCESS_TOKEN"],
+                        matrix_id=os.environ["MATRIX_USER_ID"],
+                        target=database.primary_target(),
+                        device=device,
+                    )
+
+            await sync_to_async(_init_instance_database)()
+
+            return None
         target = await database.aprimary_target()
         target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
             uuid=added_target_uuid

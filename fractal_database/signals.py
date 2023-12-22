@@ -1,5 +1,6 @@
 import logging
 import os
+import socket
 import threading
 from secrets import token_hex
 from typing import TYPE_CHECKING, Dict, List
@@ -152,16 +153,30 @@ def object_post_save(
         exit_signal_handler()
 
 
-def create_project_database(*args, **kwargs) -> None:
+def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     """
-    Runs on post_migrate signal to create the Fractal Database for the Django project
+    Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
     """
-    from fractal_database.models import Database, DatabaseConfig
+    from fractal.cli.controllers.authenticated import AuthenticatedController
+    from fractal_database.models import (
+        Database,
+        DatabaseConfig,
+        Device,
+        DummyReplicationTarget,
+    )
+    from fractal_database_matrix.models import (
+        MatrixCredentials,
+        MatrixReplicationTarget,
+    )
+
+    if not transaction.get_connection().in_atomic_block:
+        with transaction.atomic():
+            return create_database_and_matrix_replication_target(*args, **kwargs)
 
     project_name = get_project_name()
     logger.info('Creating Fractal Database for Django project "%s"' % project_name)
 
-    d, _ = Database.objects.get_or_create(
+    database, _ = Database.objects.get_or_create(
         name=project_name,
         defaults={
             "name": project_name,
@@ -169,21 +184,18 @@ def create_project_database(*args, **kwargs) -> None:
     )
 
     DatabaseConfig.objects.get_or_create(
-        current_db=d,
+        current_db=database,
         defaults={
-            "current_db": d,
+            "current_db": database,
         },
     )
-
-
-def create_matrix_replication_target(*args, **kwargs) -> None:
-    """
-    Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
-    """
-    from fractal.cli.controllers.authenticated import AuthenticatedController
-    from fractal_database.models import Database
-    from fractal_database_matrix.models import MatrixReplicationTarget
-
+    # create a dummy replication target if none exists so we can replicate when a real target is added
+    if not database.get_all_replication_targets():
+        DummyReplicationTarget.objects.create(
+            name="dummy",
+            database=database,
+            primary=False,
+        )
     creds = AuthenticatedController.get_creds()
     if creds:
         access_token, homeserver_url = creds
@@ -200,8 +212,6 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
         # TODO move access_token to a non-replicated model
         access_token = os.environ["MATRIX_ACCESS_TOKEN"]
 
-    database = Database.current_db()
-
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
     target, created = MatrixReplicationTarget.objects.get_or_create(
         name="matrix",
@@ -210,24 +220,21 @@ def create_matrix_replication_target(*args, **kwargs) -> None:
             "primary": True,
             "database": database,
             "homeserver": homeserver_url,
-            "access_token": access_token,
         },
     )
+
+    device, _created = Device.objects.get_or_create(
+        name=socket.gethostname(), defaults={"name": socket.gethostname()}
+    )
+    MatrixCredentials.objects.get_or_create(
+        access_token=access_token,
+        target=target,
+        device=device,
+        defaults={"access_token": access_token, "target": target, "device": device},
+    )
+
+    # replicate the database now that we have a replication target
     database.schedule_replication()
-
-
-def ensure_replication_target(*args, **kwargs) -> None:
-    from fractal_database.models import Database, DummyReplicationTarget
-
-    database = Database.current_db()
-    # create a dummy replication target if none exists so we can replicate when a real target is added
-
-    if not database.get_all_replication_targets():
-        DummyReplicationTarget.objects.create(
-            name="dummy",
-            database=database,
-            primary=False,
-        )
 
 
 async def _invite_device(
@@ -275,7 +282,7 @@ def join_device_to_database(
         )
 
 
-@receiver(post_save, sender="fractal_database.Device")
+# @receiver(post_save, sender="fractal_database.Device")
 def register_device_account(
     sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
 ) -> None:

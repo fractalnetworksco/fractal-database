@@ -12,9 +12,7 @@ class FractalDatabaseConfig(AppConfig):
     def ready(self):
         from fractal_database.models import Database, ReplicatedModel
         from fractal_database.signals import (
-            create_matrix_replication_target,
-            create_project_database,
-            ensure_replication_target,
+            create_database_and_matrix_replication_target,
             join_device_to_database,
         )
 
@@ -29,11 +27,10 @@ class FractalDatabaseConfig(AppConfig):
 
         # create the instance database for the project
         if not os.environ.get("MATRIX_ROOM_ID"):
-            models.signals.post_migrate.connect(create_project_database, sender=self)
-
-            models.signals.post_migrate.connect(ensure_replication_target, sender=self)
             # create the matrix replication target for the project database
-            models.signals.post_migrate.connect(create_matrix_replication_target, sender=self)
+            models.signals.post_migrate.connect(
+                create_database_and_matrix_replication_target, sender=self
+            )
 
     @staticmethod
     def _assert_installation_order():
