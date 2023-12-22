@@ -10,16 +10,20 @@ class FractalDatabaseConfig(AppConfig):
     name = "fractal_database"
 
     def ready(self):
-        from fractal_database.models import ReplicatedModel
+        from fractal_database.models import Database, ReplicatedModel
         from fractal_database.signals import (
             create_matrix_replication_target,
             create_project_database,
             ensure_replication_target,
+            join_device_to_database,
         )
 
         #   Assert that fractal_database is last in INSTALLED_APPS
         self._assert_installation_order()
 
+        models.signals.m2m_changed.connect(
+            join_device_to_database, sender=Database.devices.through
+        )
         # register replication signals for all models that subclass ReplicatedModel
         ReplicatedModel.connect_signals()
 

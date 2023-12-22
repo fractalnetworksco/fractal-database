@@ -1,12 +1,17 @@
 import logging
 import os
 import threading
+from secrets import token_hex
 from typing import TYPE_CHECKING, Dict, List
+from uuid import UUID
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
+from django.db.models.signals import m2m_changed, post_save
+from django.dispatch import receiver
+from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name
 
 logger = logging.getLogger("django")
@@ -14,7 +19,13 @@ logger = logging.getLogger("django")
 _thread_locals = threading.local()
 
 if TYPE_CHECKING:
-    from fractal_database.models import Database, ReplicatedModel, ReplicationTarget
+    from fractal_database.models import (
+        Database,
+        Device,
+        ReplicatedModel,
+        ReplicationTarget,
+    )
+    from fractal_database_matrix.models import MatrixCredentials
 
 
 def enter_signal_handler():
@@ -217,3 +228,90 @@ def ensure_replication_target(*args, **kwargs) -> None:
             database=database,
             primary=False,
         )
+
+
+async def _invite_device(
+    device_creds: "MatrixCredentials", database_room_id: str, homeserver_url: str
+) -> None:
+    access_token = os.environ.get("MATRIX_ACCESS_TOKEN")
+    device_matrix_id = device_creds.matrix_id
+
+    async with MatrixClient(
+        homeserver_url=homeserver_url,
+        access_token=access_token,
+    ) as client:
+        logger.info("Inviting %s to %s" % (device_matrix_id, database_room_id))
+        await client.invite(user_id=device_matrix_id, room_id=database_room_id, admin=True)
+
+    # accept invite on behalf of device
+    async with MatrixClient(
+        homeserver_url=homeserver_url,
+        access_token=device_creds.access_token,
+    ) as client:
+        logger.info("Accepting invite for %s as %s" % (database_room_id, device_matrix_id))
+        await client.join_room(database_room_id)
+
+
+def join_device_to_database(
+    sender: "Database", instance: "Database", pk_set: list[UUID], **kwargs
+) -> None:
+    from fractal_database.models import Device
+
+    if kwargs["action"] != "post_add":
+        return None
+
+    for device_id in pk_set:
+        device = Device.objects.get(pk=device_id)
+        primary_target = instance.primary_target()
+
+        creds = device.matrixcredentials_set.filter(
+            target__homeserver=primary_target.homeserver
+        ).get()
+
+        async_to_sync(_invite_device)(
+            creds,
+            primary_target.metadata["room_id"],
+            primary_target.homeserver,
+        )
+
+
+@receiver(post_save, sender="fractal_database.Device")
+def register_device_account(
+    sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
+) -> None:
+    from fractal_database.models import Database
+    from fractal_database_matrix.models import MatrixCredentials
+
+    if not created:
+        return None
+
+    logger.info("Registering device account for %s" % instance)
+
+    async def _register_device_account() -> tuple[str, str, str]:
+        from fractal.matrix import MatrixClient
+
+        async with MatrixClient(
+            homeserver_url=os.environ["MATRIX_HOMESERVER_URL"],
+            access_token=os.environ["MATRIX_ACCESS_TOKEN"],
+        ) as client:
+            registration_token = await client.generate_registration_token()
+            await client.whoami()
+            homeserver_name = client.user_id.split(":")[1]
+            matrix_id = f"@{instance.name}:{homeserver_name}"
+            password = token_hex(32)
+            access_token = await client.register_with_token(
+                matrix_id=matrix_id,
+                password=password,
+                registration_token=registration_token,
+                device_name=instance.display_name or instance.name,
+            )
+            return access_token, matrix_id, password
+
+    access_token, matrix_id, password = async_to_sync(_register_device_account)()
+    MatrixCredentials.objects.create(
+        matrix_id=matrix_id,
+        password=password,
+        access_token=access_token,
+        target=Database.current_db().primary_target(),
+        device=instance,
+    )

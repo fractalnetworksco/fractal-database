@@ -407,7 +407,7 @@ class Database(ReplicatedModel):
     def __str__(self) -> str:
         return self.name
 
-    def primary_target(self) -> ReplicationTarget:
+    def primary_target(self) -> Optional[ReplicationTarget]:
         """
         Returns the primary replication target for this database.
         """
@@ -416,7 +416,7 @@ class Database(ReplicatedModel):
             if target.exists():
                 return target[0]
 
-    async def aprimary_target(self) -> ReplicationTarget:
+    async def aprimary_target(self) -> Optional[ReplicationTarget]:
         return await sync_to_async(self.primary_target)()
 
     def get_all_replication_targets(self) -> List[ReplicationTarget]:
@@ -494,7 +494,8 @@ class App(ReplicatedModel):
 
 
 class Device(ReplicatedModel):
-    device_id = models.CharField(max_length=255, unique=True)
+    name = models.CharField(max_length=255, unique=True)
+    display_name = models.CharField(max_length=255, null=True, blank=True)
 
 
 class Snapshot(ReplicatedModel):

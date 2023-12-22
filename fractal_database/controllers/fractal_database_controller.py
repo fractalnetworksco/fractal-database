@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -33,16 +34,6 @@ FRACTAL_BASE_IMAGE = "fractalnetworksco/base:base"
 
 
 class FractalDatabaseController(AuthenticatedController):
-    """
-    FIXME: AuthenticatedController REQUIRES that user is logged in to
-    use ANY of the subcommands. This is not ideal for an offline-first app.
-    Probably should use an @authenticated decorator instead.
-
-    Controller that runs when no subcommands are passed.
-
-    Responsible for launching the Homeserver agent's sync loop.
-    """
-
     PLUGIN_NAME = "db"
 
     async def _invite_user(self, user_id: str, room_id: str, admin: bool) -> None:
@@ -353,7 +344,8 @@ class FractalDatabaseController(AuthenticatedController):
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         django.setup()
 
-        os.chdir(project_name)
+        print(f"Datadir: {FRACTAL_DATA_DIR}")
+        os.chdir(f"{FRACTAL_DATA_DIR}/{project_name}")
 
         call_command("makemigrations")
         call_command("migrate")
@@ -809,6 +801,49 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
         Args:
         """
         call_command("replicate")
+
+    @use_django
+    @auth_required
+    @cli_method
+    def device_create(
+        self, name: Optional[str] = None, display_name: Optional[str] = None, **kwargs
+    ):
+        """
+        Creates a new device.
+        ---
+        Args:
+            name: The name of the device to create.
+            display_name: Optional display name for the device.
+        """
+        from fractal_database.models import Device
+
+        if not name:
+            name = socket.gethostname()
+
+        d = Device.objects.create(name=name, display_name=display_name)
+
+        matrix_id = d.matrixcredentials_set.get().matrix_id
+
+        print(f"Successfully created and registered device {d.name} as {matrix_id}")
+
+    @use_django
+    @auth_required
+    @cli_method
+    def device_add(self, device_name: str, database_name: str, **kwargs):
+        """
+        Adds a device to a database.
+        ---
+        Args:
+            device_name: The name of the device to add.
+            database_name: The name of the database to add the device to.
+        """
+        from fractal_database.models import Database, Device
+
+        database = Database.objects.get(name=database_name)
+        device = Device.objects.get(name=device_name)
+        database.devices.add(device)
+
+        print(f"Successfully added {device.name} to {database.name}")
 
 
 Controller = FractalDatabaseController
