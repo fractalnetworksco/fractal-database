@@ -198,7 +198,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         )
     creds = AuthenticatedController.get_creds()
     if creds:
-        access_token, homeserver_url = creds
+        access_token, homeserver_url, _ = creds
     else:
         if not os.environ.get("MATRIX_HOMESERVER_URL") or not os.environ.get(
             "MATRIX_ACCESS_TOKEN"
