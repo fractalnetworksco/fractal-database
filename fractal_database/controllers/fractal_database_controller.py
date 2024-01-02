@@ -5,10 +5,9 @@ import os
 import socket
 import subprocess
 import sys
-import time
 from functools import partial
 from sys import exit
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import django
 import docker
@@ -16,15 +15,20 @@ import docker.api.build
 import toml
 from asgiref.sync import sync_to_async
 from django.core.management import call_command
-from django.core.management.base import CommandError
 from django.db import transaction
 from fractal.cli import FRACTAL_DATA_DIR, cli_method
 from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
 from fractal.cli.utils import data_dir, read_user_data, write_user_data
-from fractal.matrix import FractalAsyncClient, MatrixClient
+from fractal.matrix import MatrixClient
 from fractal.matrix.utils import parse_matrix_id
 from fractal_database.utils import use_django
-from nio import RoomGetStateEventError, TransferMonitor
+from nio import (
+    InviteInfo,
+    InviteMemberEvent,
+    InviteNameEvent,
+    RoomGetStateEventError,
+    TransferMonitor,
+)
 from taskiq.receiver.receiver import Receiver
 from taskiq.result_backends.dummy import DummyResultBackend
 from taskiq_matrix.matrix_queue import Task
@@ -48,6 +52,12 @@ class FractalDatabaseController(AuthenticatedController):
     async def _upload_file(self, file: str, monitor: Optional[TransferMonitor] = None) -> str:
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
             return await client.upload_file(file, monitor=monitor)
+
+    async def _list_invites(self) -> Dict[str, InviteInfo]:
+        async with MatrixClient(
+            homeserver_url=self.homeserver_url, access_token=self.access_token
+        ) as client:
+            return await client.get_room_invites()
 
     @use_django
     async def _sync_database_metadata(self, room_id: str, **kwargs) -> None:
@@ -255,6 +265,32 @@ class FractalDatabaseController(AuthenticatedController):
         asyncio.run(self._invite_user(user_id, room_id, admin))
 
         print(f"Successfully invited {user_id} to {room_id}")
+
+    @auth_required
+    @cli_method
+    def list_invites(self):
+        """
+        List invites to rooms.
+        TODO: Pretty print as a table
+        ---
+
+        """
+        invites = asyncio.run(self._list_invites())
+        for room_id, invite_info in invites.items():
+            room_name = ""
+            for event in invite_info.invite_state:
+                # invite_state is a list of events. They usually come with 3 events:
+                # 1. InviteNameEvent: this event will have the name of the room (m.room.name)
+                # 2. InviteMemberEvent: this event is the membership event of the inviter. Not particularly useful
+                #                       for us since the next event contains the actual invite membership for the invitee
+                #                       as well as the user_id of the inviter.
+                # 3. InviteMemberEvent: this event has the actual invite membership of the user (m.room.member). Contains
+                #                       the user_id of the inviter.
+                if isinstance(event, InviteNameEvent):
+                    room_name = event.name
+                elif isinstance(event, InviteMemberEvent) and event.membership == "invite":
+                    print(f"{event.sender} invited you to {room_name} ({room_id})")
+                    break
 
     @auth_required
     @cli_method
