@@ -4,6 +4,7 @@ import sys
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
 from fractal_database.models import Database
+from fractal_database_matrix.models import MatrixReplicationTarget
 
 
 class Command(BaseCommand):
@@ -23,7 +24,12 @@ class Command(BaseCommand):
             # FIXME: Handle multiple replication targets. For now just using
             # MatrixReplicationTarget
             target = database.primary_target()
-            access_token = target.access_token
+            if not target or not isinstance(target, MatrixReplicationTarget):
+                raise CommandError(
+                    "No primary replication target configured. Have you configured the MatrixReplicationTarget?"
+                )
+
+            access_token = target.matrixcredentials.access_token
             homeserver_url = target.homeserver
             room_id = target.metadata["room_id"]
         else:

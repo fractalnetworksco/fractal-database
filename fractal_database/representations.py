@@ -30,7 +30,7 @@ class Representation:
         target: "ReplicationTarget",
     ):
         """
-        Create the representation logs (tasks) for creating a Matrix space
+        Create representation logs (tasks) for creating a Representation
         """
         from fractal_database.models import RepresentationLog
 
@@ -43,3 +43,9 @@ class Representation:
                 metadata=instance.repr_metadata_props(),
             )
         ]
+
+    async def put_state(self, *args, **kwargs):
+        """
+        Put state into a Representation
+        """
+        raise NotImplementedError

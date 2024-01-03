@@ -1,6 +1,6 @@
 import logging
 from importlib import import_module
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from asgiref.sync import sync_to_async
@@ -99,7 +99,7 @@ class ReplicatedModel(BaseModel):
 
     @classmethod
     def connect_signals(cls, **kwargs):
-        from fractal_database.signals import object_post_save  # , set_object_database
+        from fractal_database.signals import object_post_save, update_target_state
 
         for model_class in cls.models:
             logger.info(
@@ -109,6 +109,7 @@ class ReplicatedModel(BaseModel):
             # models.signals.pre_save.connect(set_object_database, sender=model_class)
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
+            models.signals.post_save.connect(update_target_state, sender=model_class)
 
     def schedule_replication(self, created: bool = False, database: Optional["Database"] = None):
         # must be in a txn for defer_replication to work properly
@@ -135,7 +136,7 @@ class ReplicatedModel(BaseModel):
 
             print(f"Creating replication log for target {target}")
             repl_log = ReplicationLog.objects.create(
-                payload=serialize("python", [self]),
+                payload=self.to_fixture(),
                 target=target,
                 instance=self,
                 txn_id=transaction.savepoint().split("_")[0],
@@ -147,6 +148,11 @@ class ReplicatedModel(BaseModel):
                 repl_log.repr_logs.add(*repr_logs)
 
             defer_replication(target)
+
+    def to_fixture(self, json: bool = False) -> Union[str, List[Dict[str, Any]]]:
+        if json:
+            return serialize("json", [self])
+        return serialize("python", [self])
 
     def repr_metadata_props(self) -> Dict[str, str]:
         """
@@ -367,11 +373,11 @@ class RepresentationLog(BaseModel):
     metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
 
     @classmethod
-    def _get_repr_instance(cls, module: str) -> Optional[Representation]:
+    def _get_repr_instance(cls, module: str) -> Representation:
         """
         Imports and returns the provided method.
         """
-        repr_module, repr_class = module.rsplit(".", 1)  # type: ignore
+        repr_module, repr_class = module.rsplit(".", 1)
         repr_module = import_module(repr_module)
         repr_class = getattr(repr_module, repr_class)
         return repr_class()
@@ -408,7 +414,9 @@ class Database(ReplicatedModel):
         Returns the primary replication target for this database.
         """
         for subclass in ReplicationTarget.__subclasses__():
-            target = subclass.objects.filter(database=self, primary=True)
+            target = subclass.objects.filter(database=self, primary=True).select_related(
+                "matrixcredentials"
+            )
             if target.exists():
                 return target[0]
 

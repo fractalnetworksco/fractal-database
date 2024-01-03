@@ -3,17 +3,15 @@ import os
 import socket
 import threading
 from secrets import token_hex
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Union
 from uuid import UUID
 
 from asgiref.sync import async_to_sync
-from django.conf import settings
 from django.db import transaction
 from django.db.models import F
-from django.db.models.signals import m2m_changed, post_save
-from django.dispatch import receiver
 from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name
+from taskiq_matrix.lock import MatrixLock
 
 logger = logging.getLogger("django")
 
@@ -26,7 +24,11 @@ if TYPE_CHECKING:
         ReplicatedModel,
         ReplicationTarget,
     )
-    from fractal_database_matrix.models import MatrixCredentials
+    from fractal_database.representations import Representation
+    from fractal_database_matrix.models import (
+        MatrixCredentials,
+        MatrixReplicationTarget,
+    )
 
 
 def enter_signal_handler():
@@ -155,7 +157,8 @@ def object_post_save(
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     """
-    Runs on post_migrate signal to setup the MatrixReplicationTarget for the Django project
+    Runs on post_migrate signal to setup the MatrixReplicationTarget for the
+    Django project.
     """
     from fractal.cli.controllers.authenticated import AuthenticatedController
     from fractal_database.models import (
@@ -282,7 +285,6 @@ def join_device_to_database(
         )
 
 
-# @receiver(post_save, sender="fractal_database.Device")
 def register_device_account(
     sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
 ) -> None:
@@ -321,4 +323,72 @@ def register_device_account(
         access_token=access_token,
         target=Database.current_db().primary_target(),
         device=instance,
+    )
+
+
+async def _lock_and_put_state(
+    repr_instance: "Representation",
+    room_id: str,
+    target: "MatrixReplicationTarget",
+    state_type: str,
+    content: dict[str, Any],
+) -> None:
+    """
+    Acquires a lock for the given state_type and puts the state in the provided room.
+    """
+    async with MatrixLock(target.homeserver, target.matrixcredentials.access_token, room_id).lock(
+        key=state_type
+    ) as lock_id:
+        print(f"Got lock id: {lock_id}")
+        await repr_instance.put_state(room_id, target, state_type, content)
+
+
+def update_target_state(
+    sender: Union["Database", "MatrixReplicationTarget"],
+    instance: Union["Database", "MatrixReplicationTarget"],
+    created: bool,
+    raw: bool,
+    **kwargs,
+) -> None:
+    """
+    Updates the state for f.database or f.database.target whenever a
+    Database or MatrixReplicationTarget is saved.
+    """
+    from fractal_database.models import Database, RepresentationLog
+    from fractal_database_matrix.models import MatrixReplicationTarget
+
+    logger.info("Updating target state for %s" % instance)
+    # dont do anything if loading from fixture or a new object is created
+    if raw or created:
+        return None
+
+    # only update the state if the object is the primary target
+    if isinstance(instance, MatrixReplicationTarget) and not instance.primary:
+        return None
+    elif isinstance(instance, Database):
+        target = instance.primary_target()
+        if not target:
+            logger.warning(
+                "Cannot update target state, no primary target found for database %s" % instance
+            )
+            return None
+    else:
+        target = instance
+
+    room_id = target.metadata.get("room_id")
+    if not room_id:
+        logger.warning("Cannot update target state, no room_id found for target %s" % target)
+        return None
+
+    instance_fixture = instance.to_fixture(json=True)
+    representation_module = target.get_representation_module()
+    print(f"Got representation module: {representation_module}")
+    repr_instance = RepresentationLog._get_repr_instance(representation_module)
+    state_type = "f.database" if isinstance(instance, Database) else "f.database.target"
+    # put state needs the matrix credentials for the target so accessing the creds here
+    # ensures that the creds are loaded into memory (avoiding lazy loading issues in async)
+    target.matrixcredentials
+
+    async_to_sync(_lock_and_put_state)(
+        repr_instance, room_id, target, state_type, {"fixture": instance_fixture}
     )
