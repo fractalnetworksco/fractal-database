@@ -160,7 +160,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     Runs on post_migrate signal to setup the MatrixReplicationTarget for the
     Django project.
     """
-    from fractal.cli.controllers.authenticated import AuthenticatedController
+    from fractal.cli.controllers.auth import AuthenticatedController
     from fractal_database.models import (
         Database,
         DatabaseConfig,

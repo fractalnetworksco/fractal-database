@@ -14,10 +14,11 @@ import docker
 import docker.api.build
 import toml
 from asgiref.sync import sync_to_async
+from clicz import cli_method
 from django.core.management import call_command
 from django.db import transaction
-from fractal.cli import FRACTAL_DATA_DIR, cli_method
-from fractal.cli.controllers.authenticated import AuthenticatedController, auth_required
+from fractal.cli import FRACTAL_DATA_DIR
+from fractal.cli.controllers.auth import AuthenticatedController, auth_required
 from fractal.cli.utils import data_dir, read_user_data, write_user_data
 from fractal.matrix import MatrixClient
 from fractal.matrix.utils import parse_matrix_id
