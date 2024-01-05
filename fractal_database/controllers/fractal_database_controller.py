@@ -30,9 +30,13 @@ from nio import (
     RoomGetStateEventError,
     TransferMonitor,
 )
+from taskiq.middlewares.retry_middleware import SimpleRetryMiddleware
 from taskiq.receiver.receiver import Receiver
 from taskiq.result_backends.dummy import DummyResultBackend
+from taskiq_matrix.matrix_broker import MatrixBroker
 from taskiq_matrix.matrix_queue import Task
+from taskiq_matrix.matrix_result_backend import MatrixResultBackend
+from taskiq_matrix.schedulesource import MatrixRoomScheduleSource
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
@@ -137,11 +141,27 @@ class FractalDatabaseController(AuthenticatedController):
 
         return None
 
-    async def _sync_data(self, room_id: str) -> None:
-        from fractal_database_matrix.broker import broker
-
+    async def _sync_data(self, room_id: str, broker: MatrixBroker) -> None:
         # FIXME: create_filter should be moved onto the FractalAsyncClient
         from taskiq_matrix.filters import create_room_message_filter
+
+        # broker = (
+        #     MatrixBroker()
+        #     .with_matrix_config(
+        #         room_id=os.environ.get("MATRIX_ROOM_ID"),
+        #         homeserver_url=os.environ.get("MATRIX_HOMESERVER_URL"),
+        #         access_token=os.environ.get("MATRIX_ACCESS_TOKEN"),
+        #     )
+        #     .with_result_backend(
+        #         MatrixResultBackend(
+        #             room_id=os.environ.get("MATRIX_ROOM_ID"),
+        #             homeserver_url=os.environ.get("MATRIX_HOMESERVER_URL"),
+        #             access_token=os.environ.get("MATRIX_ACCESS_TOKEN"),
+        #             result_ex_time=60,
+        #         )
+        #     )
+        #     .with_middlewares(SimpleRetryMiddleware(default_retry_count=3))
+        # )
 
         broker._init_queues()
 
@@ -154,7 +174,9 @@ class FractalDatabaseController(AuthenticatedController):
             task_filter = create_room_message_filter(
                 room_id, types=[broker.replication_queue.task_types.task]
             )
-            tasks = await broker.replication_queue.get_tasks(timeout=0, task_filter=task_filter)
+            tasks = await broker.replication_queue.get_tasks(
+                timeout=0, task_filter=task_filter, update_checkpoint=False
+            )
             print(f"Got tasks: {len(tasks)}")
             if not tasks:
                 print("No more tasks")
@@ -836,10 +858,18 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
         Args:
             room_id: The room ID to sync from.
         """
+        print("room id", room_id)
         os.environ["MATRIX_ROOM_ID"] = room_id
         from fractal_database.replication.tasks import replicate_fixture
+        from fractal_database_matrix.broker import broker
 
-        asyncio.run(self._sync_data(room_id))
+        broker = broker.with_matrix_config(
+            room_id=os.environ.get("MATRIX_ROOM_ID"),
+            homeserver_url=os.environ.get("MATRIX_HOMESERVER_URL"),
+            access_token=os.environ.get("MATRIX_ACCESS_TOKEN"),
+        )
+
+        asyncio.run(self._sync_data(room_id, broker))
 
     @use_django
     @cli_method

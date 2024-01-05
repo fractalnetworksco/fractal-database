@@ -9,6 +9,8 @@ from uuid import UUID
 from asgiref.sync import async_to_sync
 from django.db import transaction
 from django.db.models import F
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name
 from taskiq_matrix.lock import MatrixLock
@@ -285,13 +287,14 @@ def join_device_to_database(
         )
 
 
+@receiver(post_save, sender="fractal_database.Device")
 def register_device_account(
     sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
 ) -> None:
     from fractal_database.models import Database
     from fractal_database_matrix.models import MatrixCredentials
 
-    if not created:
+    if raw or not created:
         return None
 
     logger.info("Registering device account for %s" % instance)
@@ -338,8 +341,7 @@ async def _lock_and_put_state(
     """
     async with MatrixLock(target.homeserver, target.matrixcredentials.access_token, room_id).lock(
         key=state_type
-    ) as lock_id:
-        print(f"Got lock id: {lock_id}")
+    ):
         await repr_instance.put_state(room_id, target, state_type, content)
 
 
@@ -357,19 +359,21 @@ def update_target_state(
     from fractal_database.models import Database, RepresentationLog
     from fractal_database_matrix.models import MatrixReplicationTarget
 
-    logger.info("Updating target state for %s" % instance)
     # dont do anything if loading from fixture or a new object is created
     if raw or created:
         return None
+
+    logger.info("Updating target state for %s" % instance)
 
     # only update the state if the object is the primary target
     if isinstance(instance, MatrixReplicationTarget) and not instance.primary:
         return None
     elif isinstance(instance, Database):
-        target = instance.primary_target()
+        target: MatrixReplicationTarget = instance.primary_target()  # type: ignore
         if not target:
             logger.warning(
-                "Cannot update target state, no primary target found for database %s" % instance
+                "Cannot update state on target, no primary target found for database %s"
+                % instance
             )
             return None
     else:
@@ -381,8 +385,8 @@ def update_target_state(
         return None
 
     instance_fixture = instance.to_fixture(json=True)
-    representation_module = target.get_representation_module()
-    print(f"Got representation module: {representation_module}")
+    representation_module: str = target.get_representation_module()  # type: ignore
+    logger.debug(f"Got representation module: {representation_module}")
     repr_instance = RepresentationLog._get_repr_instance(representation_module)
     state_type = "f.database" if isinstance(instance, Database) else "f.database.target"
     # put state needs the matrix credentials for the target so accessing the creds here
