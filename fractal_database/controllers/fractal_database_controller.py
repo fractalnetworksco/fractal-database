@@ -338,6 +338,13 @@ class FractalDatabaseController(AuthenticatedController):
             no_migrate: Whether or not to skip initial migrations.
             exist_ok: Dont return error exit code if project already exists.
         """
+        if not no_migrate and not self.access_token:
+            # if applying migrations, then user must be logged in.
+            # we dont want to get in a partially initialized state, then
+            # fail due to user not being logged in when we
+            # actually go to apply migrations later.
+            print("You must be logged in to initialize a Fractal Database project.")
+            exit(1)
         if app:
             try:
                 importlib.import_module(app)
