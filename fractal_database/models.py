@@ -457,7 +457,7 @@ class Database(ReplicatedModel):
         return await sync_to_async(cls.current_db)()
 
 
-class AppMetadata(ReplicatedModel, MatrixRoom):
+class AppMetadata(ReplicatedModel):
     """
     created when doing `fractal publish`
     """
@@ -471,7 +471,7 @@ class AppMetadata(ReplicatedModel, MatrixRoom):
     checksum = models.CharField(max_length=255)
 
     async def store_metadata(self, metadata: dict) -> None:
-        self.app_ids.append(metadata["room_id"])
+        self.app_ids.append(metadata["mxc_uri"])
         await self.asave()
 
     def clean(self):

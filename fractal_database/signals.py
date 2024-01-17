@@ -9,6 +9,8 @@ from uuid import UUID
 from asgiref.sync import async_to_sync
 from django.db import transaction
 from django.db.models import F
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name
 from taskiq_matrix.lock import MatrixLock
@@ -199,6 +201,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
             database=database,
             primary=False,
         )
+
     creds = AuthenticatedController.get_creds()
     if creds:
         access_token, homeserver_url, _ = creds
@@ -344,11 +347,7 @@ async def _lock_and_put_state(
 
 
 def update_target_state(
-    sender: Union["Database", "MatrixReplicationTarget"],
-    instance: Union["Database", "MatrixReplicationTarget"],
-    created: bool,
-    raw: bool,
-    **kwargs,
+    sender: "ReplicatedModel", instance: "ReplicatedModel", created: bool, raw: bool, **kwargs
 ) -> None:
     """
     Updates the state for f.database or f.database.target whenever a
@@ -357,11 +356,11 @@ def update_target_state(
     from fractal_database.models import Database, RepresentationLog
     from fractal_database_matrix.models import MatrixReplicationTarget
 
-    logger.info("Updating target state for %s" % instance)
     # dont do anything if loading from fixture or a new object is created
-    if raw or created:
+    if not isinstance(instance, (Database, MatrixReplicationTarget)) or raw or created:
         return None
 
+    logger.info("Updating target state for %s" % instance)
     # only update the state if the object is the primary target
     if isinstance(instance, MatrixReplicationTarget) and not instance.primary:
         return None

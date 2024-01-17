@@ -60,6 +60,12 @@ class FractalDatabaseController(AuthenticatedController):
         ) as client:
             return await client.get_room_invites()
 
+    async def _mxc_to_http(self, mxc_url: str) -> Optional[str]:
+        async with MatrixClient(
+            homeserver_url=self.homeserver_url, access_token=self.access_token
+        ) as client:
+            return await client.mxc_to_http(mxc_url)
+
     @use_django
     async def _sync_database_metadata(self, room_id: str, **kwargs) -> None:
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
@@ -102,6 +108,12 @@ class FractalDatabaseController(AuthenticatedController):
         try:
             # get the parent database
             database = await Database.acurrent_db()
+
+            # if current database is the same as the one we are syncing, return
+            # (dont want to create a representation for the same database)
+            if database_uuid == str(database.uuid):
+                return None
+
         except DatabaseConfig.DoesNotExist:
             # we are initializing an instance database
             def _init_instance_database():
@@ -120,8 +132,8 @@ class FractalDatabaseController(AuthenticatedController):
                     )
 
             await sync_to_async(_init_instance_database)()
-
             return None
+
         target = await database.aprimary_target()
         target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
             uuid=added_target_uuid
@@ -415,7 +427,6 @@ class FractalDatabaseController(AuthenticatedController):
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         django.setup()
 
-        print(f"Datadir: {FRACTAL_DATA_DIR}")
         os.chdir(f"{FRACTAL_DATA_DIR}/{project_name}")
 
         call_command("makemigrations")
@@ -584,7 +595,7 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
             return False
 
     @cli_method
-    def build_base(self, verbose: bool = False):
+    def build_base(self, verbose: bool = True):
         """
         Builds a base Docker image with all Fractal Database projects installed.
         Built image is tagged as fractalnetworksco/base:base
@@ -667,7 +678,11 @@ RUN pip install /fractal/fractal-database/
             verbose: Whether or not to print verbose output.
         """
         try:
-            self._get_fractal_app()
+            pyproject = self._get_fractal_app()
+
+            # detect if it has a namespace property
+            if "namespace" in pyproject["tool"]["fractal"]:
+                name = f"{pyproject['tool']['fractal']['namespace']}"
         except Exception:
             exit(1)
 
@@ -677,7 +692,10 @@ RUN pip install /fractal/fractal-database/
             print("Failed to connect to Docker daemon.")
             print("Is Docker installed and running?")
             exit(1)
-        image_tag = f"{name}:fractal-database"
+
+        name = name.replace("-", "_")
+        project_name = name.replace(".", "_")
+        image_tag = f"{project_name}:fractal-database"
 
         # ensure base image is built
         if client.images.list(name=FRACTAL_BASE_IMAGE) == []:
@@ -689,7 +707,7 @@ RUN mkdir /code
 COPY . /code
 RUN pip install /code
 
-RUN fractal db init --app {name} --project-name {name}_app --no-migrate
+RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
 """
         # FIXME: Have to monkey patch in order to build from in-memory Dockerfiles correctly
         docker.api.build.process_dockerfile = lambda dockerfile, path: ("Dockerfile", dockerfile)
@@ -711,9 +729,10 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
                     print(line["stream"], end="")
         return image_tag
 
+    @use_django
     @auth_required
     @cli_method
-    def deploy(self, verbose: bool = False):
+    def deploy(self, verbose: bool = True, **kwargs):
         """
         Builds a given database into a Docker container and exports it as a tarball, and
         uploads it to the Fractal Matrix server.
@@ -721,7 +740,7 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
         Must be in the directory where pyproject.toml is located.
         ---
         Args:
-            verbose: Whether or not to print verbose output.
+            verbose: Whether or not to print verbose output. Defaults to True.
 
         """
         path = "."
@@ -747,11 +766,16 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
             print(f"Failed to extract image: {e}")
             exit(1)
 
-        return self.upload(f"{name}.tar", verbose=verbose)
+        content_uri = self.upload(f"{name}.tar", verbose=verbose)
+
+        from fractal_database.models import App, AppMetadata
+
+        metadata = AppMetadata.objects.create(name=name, app_ids=[content_uri])
+        App.objects.create(metadata=metadata)
 
     @auth_required
     @cli_method
-    def upload(self, file: str, verbose: bool = False):
+    def upload(self, file: str, verbose: bool = True) -> str:
         """
         Builds a given database into a Docker container and exports it as a tarball, and
         uploads it to the Fractal Matrix server.
@@ -782,7 +806,7 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
         try:
             content_uri = asyncio.run(self._upload_file(file, monitor=monitor))
         except Exception as e:
-            print(f"Failed to upload file: {e}")
+            print(f"\nFailed to upload file: {e}")
             exit(1)
         except KeyboardInterrupt:
             print("\nCancelled upload.")
@@ -790,47 +814,50 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
 
         print(f"Successfully uploaded {file} to {content_uri}")
 
-    # @auth_required
-    # @cli_method
-    # def download(self, mxc_uri: str, download_path: str = ".", quiet: bool = False):
-    #     """
-    #     Builds a given database into a Docker container and exports it as a tarball, and
-    #     uploads it to the Fractal Matrix server.
+        return content_uri
 
-    #     Must be in the directory where pyproject.toml is located.
-    #     ---
-    #     Args:
-    #         mxc_uri: The mxc:// URI to download.
-    #         download_path: The path to download the file to. Defaults to current directory.
-    #         quiet: Whether or not to print verbose output (Progress bar).
+    @auth_required
+    @cli_method
+    def download(self, mxc_uri: str, download_path: str = ".", verbose: bool = False):
+        """
+        Downloads the given app from the Matrix server and loads it into Docker.
+        ---
+        Args:
+            mxc_uri: The mxc:// URI to download.
+            download_path: The path to download the file to. Defaults to current directory.
+            verbose: Whether or not to print verbose output (Progress bar).
+        """
+        # convert mxc_uri to a URL
+        http_url = asyncio.run(self._mxc_to_http(mxc_uri))
+        if not http_url:
+            print(f"Failed to convert {mxc_uri} to an HTTP URL.")
+            exit(1)
 
-    #     """
-    #     try:
-    #         file_size = os.path.getsize(file)
-    #     except FileNotFoundError:
-    #         print(f"Failed to find file {file}.")
-    #         exit(1)
+        command = [
+            "curl",
+            "-o",
+            f"{download_path}/app.tar",
+        ]
+        if not verbose:
+            command.append("-s")
 
-    #     monitor = None
-    #     if not quiet:
-    #         monitor = TransferMonitor(total_size=file_size)
-    #         progress_bar = partial(
-    #             self._print_file_progress,
-    #             file_size=file_size,
-    #             monitor=monitor,
-    #         )
-    #         monitor.on_transferred = progress_bar
+        print(f"Downloading app...")
 
-    #     try:
-    #         content_uri = asyncio.run(self._upload_file(file, monitor=monitor))
-    #     except Exception as e:
-    #         print(f"Failed to upload file: {e}")
-    #         exit(1)
-    #     except KeyboardInterrupt:
-    #         print("\nCancelled upload.")
-    #         exit(1)
+        try:
+            subprocess.run([*command, http_url], check=True)
+        except Exception as e:
+            print(f"Failed to download {http_url}: {e}")
+            exit(1)
 
-    #     print(f"Successfully uploaded {file} to {content_uri}")
+        # load the app into Docker
+        try:
+            subprocess.run(["docker", "load", "-i", f"{download_path}/app.tar"], check=True)
+        except Exception as e:
+            print(f"Failed to load app: {e}")
+            exit(1)
+
+        # remove the tarball
+        os.remove(f"{download_path}/app.tar")
 
     @use_django
     @auth_required
@@ -847,6 +874,30 @@ RUN fractal db init --app {name} --project-name {name}_app --no-migrate
         from fractal_database.replication.tasks import replicate_fixture
 
         asyncio.run(self._sync_data(room_id))
+
+    @use_django
+    @auth_required
+    @cli_method
+    def fetch(self, **kwargs):
+        """
+        Fetches latest database info from Matrix for all of your local databases.
+        ---
+        Args:
+        """
+        from fractal_database.models import Database
+        from fractal_database.replication.tasks import replicate_fixture
+        from fractal_database_matrix.models import MatrixReplicationTarget
+
+        databases = Database.objects.all()
+        if not databases:
+            print("No Databases found. Get started by doing")
+            print("fractal init")
+        for database in databases:
+            primary_target = database.primary_target()
+            if isinstance(primary_target, MatrixReplicationTarget):
+                room_id: str = primary_target.metadata.get("room_id")
+                if room_id:
+                    asyncio.run(self._sync_database_metadata(room_id))
 
     @use_django
     @cli_method
