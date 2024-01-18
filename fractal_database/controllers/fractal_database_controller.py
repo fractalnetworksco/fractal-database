@@ -770,8 +770,8 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
 
         from fractal_database.models import App, AppMetadata
 
-        metadata = AppMetadata.objects.create(name=name, app_ids=[content_uri])
-        App.objects.create(metadata=metadata)
+        AppMetadata.objects.create(name=name, app_ids=[content_uri])
+        # App.objects.create(metadata=metadata)
 
     @auth_required
     @cli_method
