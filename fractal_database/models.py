@@ -72,11 +72,6 @@ class DatabaseConfig(BaseModel):
 class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
-    databases = models.ManyToManyField(
-        "fractal_database.Database",
-        related_name="%(app_label)s_%(class)s_target_type",
-    )
-
     models = []
 
     class Meta:
@@ -122,44 +117,37 @@ class ReplicatedModel(BaseModel):
                 return self.schedule_replication(created=created)
 
         print("Inside ReplicatedModel.schedule_replication()")
-        # if not database:
-        #     try:
-        #         database = Database.current_db()
-        #     except DatabaseConfig.DoesNotExist as e:
-        #         logger.error("Unable to get current database from schedule_replication")
-        #         return
+        if not database:
+            try:
+                database = Database.current_db()
+            except DatabaseConfig.DoesNotExist as e:
+                logger.error("Unable to get current database from schedule_replication")
+                return
 
-        databases = list(self.databases.all())
-        if isinstance(self, Database):
-            databases.append(self)
-        elif isinstance(self, ReplicationTarget):
-            databases.append(self.database)
+        # TODO replication targets to implement their own serialization strategy
+        targets = database.get_all_replication_targets()  # type: ignore
+        repr_logs = None
+        for target in targets:
+            # pass this replicated model instance to the target's replication method
+            if created:
+                repr_logs = target.create_representation_logs(self)
+            else:
+                print("Not creating repr for object: ", self)
 
-        for database in databases:
-            # TODO replication targets to implement their own serialization strategy
-            targets = database.get_all_replication_targets()  # type: ignore
-            repr_logs = None
-            for target in targets:
-                # pass this replicated model instance to the target's replication method
-                if created:
-                    repr_logs = target.create_representation_logs(self)
-                else:
-                    print("Not creating repr for object: ", self)
+            print(f"Creating replication log for target {target}")
+            repl_log = ReplicationLog.objects.create(
+                payload=self.to_fixture(),
+                target=target,
+                instance=self,
+                txn_id=transaction.savepoint().split("_")[0],
+            )
 
-                print(f"Creating replication log for target {target}")
-                repl_log = ReplicationLog.objects.create(
-                    payload=self.to_fixture(),
-                    target=target,
-                    instance=self,
-                    txn_id=transaction.savepoint().split("_")[0],
-                )
+            # dummy targets return none
+            if repr_logs:
+                print("Adding repr logs to repl log")
+                repl_log.repr_logs.add(*repr_logs)
 
-                # dummy targets return none
-                if repr_logs:
-                    print("Adding repr logs to repl log")
-                    repl_log.repr_logs.add(*repr_logs)
-
-                defer_replication(target)
+            defer_replication(target)
 
     def to_fixture(self, json: bool = False) -> Union[str, List[Dict[str, Any]]]:
         if json:
@@ -479,45 +467,13 @@ class AppCatalog(ReplicatedModel):
     # figure out how to enforce type safety on this field
     # this field should only be set when creating the representation for an App
     app_ids = models.JSONField(default=list)
-    metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
     git_url = models.URLField()
     checksum = models.CharField(max_length=255)
     public = models.BooleanField(default=True)
 
     async def store_metadata(self, metadata: dict) -> None:
-        self.metadata["room_id"] = metadata["room_id"]
-        await self.asave()
-
-    async def store_app_id(self, metadata: dict) -> None:
         self.app_ids.append(metadata["room_id"])
         await self.asave()
-
-    def get_representation_module(self) -> str:
-        return "fractal_database_matrix.representations.MatrixSubRoom"
-
-    def repr_metadata_props(self) -> Dict[str, str]:
-        """
-        Returns the representation metadata properties for this target.
-        """
-
-        def get_nested_attr(obj, attr_path):
-            """
-            Recursively get nested attributes of an object.
-
-            :param obj: The object from which attributes are fetched.
-            :param attr_path: String path of nested attributes separated by dots.
-            :return: Value of the nested attribute.
-            """
-            if "." in attr_path:
-                head, rest = attr_path.split(".", 1)
-                return get_nested_attr(getattr(obj, head), rest)
-            else:
-                return getattr(obj, attr_path)
-
-        metadata_props = {"uuid": "uuid", "name": "name", "public": "public"}
-        return {
-            prop_name: get_nested_attr(self, prop) for prop_name, prop in metadata_props.items()
-        }
 
     def clean(self):
         """

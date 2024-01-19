@@ -732,7 +732,7 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
     @use_django
     @auth_required
     @cli_method
-    def deploy(self, verbose: bool = True, **kwargs):
+    def publish(self, verbose: bool = True, **kwargs):
         """
         Builds a given database into a Docker container and exports it as a tarball, and
         uploads it to the Fractal Matrix server.
@@ -766,12 +766,11 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
             print(f"Failed to extract image: {e}")
             exit(1)
 
-        content_uri = self.upload(f"{name}.tar", verbose=verbose)
+        mxc_uri = self.upload(f"{name}.tar", verbose=verbose)
 
-        from fractal_database.models import App, AppMetadata
+        from fractal_database.models import AppCatalog
 
-        AppMetadata.objects.create(name=name, app_ids=[content_uri])
-        # App.objects.create(metadata=metadata)
+        AppCatalog.objects.create(name=name, app_ids=[mxc_uri])
 
     @auth_required
     @cli_method

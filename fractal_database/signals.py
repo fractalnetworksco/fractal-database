@@ -221,6 +221,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
     target, created = MatrixReplicationTarget.objects.get_or_create(
         name="matrix",
+        database=database,
         defaults={
             "name": "matrix",
             "primary": True,
