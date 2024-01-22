@@ -1,18 +1,20 @@
 import logging
 import os
 import socket
+import tarfile
 import threading
 from secrets import token_hex
-from typing import TYPE_CHECKING, Any, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import UUID
 
 from asgiref.sync import async_to_sync
+from django.apps import AppConfig
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F
-from django.db.models.signals import post_save
-from django.dispatch import receiver
 from fractal.matrix import MatrixClient
-from fractal_database.utils import get_project_name
+from fractal_database.utils import get_project_name, init_poetry_project
+from nio import RoomPutStateError
 from taskiq_matrix.lock import MatrixLock
 
 logger = logging.getLogger("django")
@@ -392,3 +394,88 @@ def update_target_state(
     async_to_sync(_lock_and_put_state)(
         repr_instance, room_id, target, state_type, {"fixture": instance_fixture}
     )
+
+
+def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
+    """
+    Creates a tarball of the `sender` app.
+
+    TODO: Figure out the end user interface for this. Should the user
+    connect this signal in their app's ready function?
+    """
+    app_path = sender.path
+    app_name = sender.name
+
+    # ensure export directory exists
+    os.makedirs(settings.FRACTAL_EXPORT_DIR, exist_ok=True)
+
+    with tarfile.open(f"{settings.FRACTAL_EXPORT_DIR}/{app_name}.tar.gz", "w:gz") as tar:
+        # extract everything excluding __pycache__ or any files that start with .
+        for root, dirs, files in os.walk(app_path):
+            dirs[:] = [d for d in dirs if d != "__pycache__" or not d.startswith(".")]
+            files = [f for f in files if not f.startswith(".")]
+
+            # Adjust the arcname to prefix with app_name
+            for file in files:
+                file_path = os.path.join(root, file)
+                tar.add(
+                    file_path,
+                    arcname=os.path.join(app_name, os.path.relpath(file_path, app_path)),
+                )
+
+            # create an in memory file to create pyproject.toml for the app
+            # if the app doesn't already have a pyproject.toml
+            if not os.path.exists(f"{app_path}/pyproject.toml"):
+                pyproject_file = init_poetry_project(app_name, in_memory=True)
+                tarinfo = tarfile.TarInfo("pyproject.toml")
+                tarinfo.size = len(pyproject_file.getvalue())
+                tar.addfile(tarinfo=tarinfo, fileobj=pyproject_file)
+
+    logger.info("Created tarball of %s" % app_name)
+
+
+def upload_exported_apps(*args, **kwargs) -> None:
+    from fractal_database.models import Database
+    from fractal_database_matrix.models import MatrixReplicationTarget
+
+    database = Database.current_db()
+    if not database:
+        logger.warning("No current database found, skipping app upload")
+        return None
+
+    primary_target = database.primary_target()
+    if not primary_target or not isinstance(primary_target, MatrixReplicationTarget):
+        logger.warning("No primary target found, skipping app upload")
+        return None
+
+    async def _upload_app(room_id: str, app: str) -> None:
+        async with MatrixClient(
+            homeserver_url=primary_target.homeserver,
+            access_token=primary_target.matrixcredentials.access_token,
+        ) as client:
+            mxc_uri = await client.upload_file(
+                f"{settings.FRACTAL_EXPORT_DIR}/{app}",
+                filename=app,
+            )
+
+            # remove the .tar.gz part of the app name
+            app_name = app.split(".tar.gz")[0]
+
+            # send the mxc uri to the room
+            res = await client.room_put_state(
+                room_id, f"f.database.app.{app_name}", {"mxc": mxc_uri}
+            )
+            if isinstance(res, RoomPutStateError):
+                logger.error("Error uploading app: %s" % res.message)
+            else:
+                logger.info("Uploaded %s to %s" % (app, primary_target.homeserver))
+
+    room_id = primary_target.metadata["room_id"]
+
+    # get all the apps in the export directory
+    apps = os.listdir(settings.FRACTAL_EXPORT_DIR)
+    for app_name in apps:
+        if not app_name.endswith(".tar.gz"):
+            continue
+        logger.info(f"Uploading {app_name} to {primary_target.homeserver}")
+        async_to_sync(_upload_app)(room_id, app_name)

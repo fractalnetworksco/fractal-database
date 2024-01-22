@@ -14,6 +14,7 @@ class FractalDatabaseConfig(AppConfig):
         from fractal_database.signals import (
             create_database_and_matrix_replication_target,
             join_device_to_database,
+            upload_exported_apps,
         )
 
         #   Assert that fractal_database is last in INSTALLED_APPS
@@ -31,6 +32,8 @@ class FractalDatabaseConfig(AppConfig):
             models.signals.post_migrate.connect(
                 create_database_and_matrix_replication_target, sender=self
             )
+
+        models.signals.post_migrate.connect(upload_exported_apps, sender=self)
 
     @staticmethod
     def _assert_installation_order():
