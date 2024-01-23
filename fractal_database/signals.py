@@ -34,6 +34,11 @@ if TYPE_CHECKING:
         MatrixReplicationTarget,
     )
 
+try:
+    FRACTAL_EXPORT_DIR = settings.FRACTAL_EXPORT_DIR
+except:
+    FRACTAL_EXPORT_DIR = settings.BASE_DIR / "export"
+
 
 def enter_signal_handler():
     """Increments the counter indicating we've entered a new signal handler."""
@@ -345,7 +350,6 @@ async def _lock_and_put_state(
     async with MatrixLock(target.homeserver, target.matrixcredentials.access_token, room_id).lock(
         key=state_type
     ) as lock_id:
-        print(f"Got lock id: {lock_id}")
         await repr_instance.put_state(room_id, target, state_type, content)
 
 
@@ -411,9 +415,9 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
     app_name = sender.name
 
     # ensure export directory exists
-    os.makedirs(settings.FRACTAL_EXPORT_DIR, exist_ok=True)
+    os.makedirs(FRACTAL_EXPORT_DIR, exist_ok=True)
 
-    with tarfile.open(f"{settings.FRACTAL_EXPORT_DIR}/{app_name}.tar.gz", "w:gz") as tar:
+    with tarfile.open(f"{FRACTAL_EXPORT_DIR}/{app_name}.tar.gz", "w:gz") as tar:
         # extract everything excluding __pycache__ or any dirs/files that start with . or end with .pyc
         for root, dirs, files in os.walk(app_path):
             dirs[:] = [d for d in dirs if d != "__pycache__" and not d.startswith(".")]
@@ -440,7 +444,13 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
 
 
 def upload_exported_apps(*args, **kwargs) -> None:
-    from fractal_database.models import Database
+    try:
+        apps = os.listdir(FRACTAL_EXPORT_DIR)
+    except FileNotFoundError:
+        logger.info("No apps found in export directory. Skipping upload")
+        return None
+
+    from fractal_database.models import Database, RepresentationLog
     from fractal_database_matrix.models import MatrixReplicationTarget
 
     database = Database.current_db()
@@ -453,32 +463,31 @@ def upload_exported_apps(*args, **kwargs) -> None:
         logger.warning("No primary target found, skipping app upload")
         return None
 
+    representation_module = primary_target.get_representation_module()
+    repr_instance = RepresentationLog._get_repr_instance(representation_module)
+
     async def _upload_app(room_id: str, app: str) -> None:
         async with MatrixClient(
             homeserver_url=primary_target.homeserver,
             access_token=primary_target.matrixcredentials.access_token,
         ) as client:
             mxc_uri = await client.upload_file(
-                f"{settings.FRACTAL_EXPORT_DIR}/{app}",
+                f"{FRACTAL_EXPORT_DIR}/{app}",
                 filename=app,
             )
 
             # remove the .tar.gz part of the app name
             app_name = app.split(".tar.gz")[0]
+            state_type = f"f.database.app.{app_name}"
 
-            # send the mxc uri to the room
-            res = await client.room_put_state(
-                room_id, f"f.database.app.{app_name}", {"mxc": mxc_uri}
+            await _lock_and_put_state(
+                repr_instance, room_id, primary_target, state_type, {"mxc": mxc_uri}
             )
-            if isinstance(res, RoomPutStateError):
-                logger.error("Error uploading app: %s" % res.message)
-            else:
-                logger.info("Uploaded %s to %s" % (app, primary_target.homeserver))
+            logger.info("Uploaded %s to %s" % (app, primary_target.homeserver))
 
     room_id = primary_target.metadata["room_id"]
 
     # get all the apps in the export directory
-    apps = os.listdir(settings.FRACTAL_EXPORT_DIR)
     for app_name in apps:
         if not app_name.endswith(".tar.gz"):
             continue
@@ -486,4 +495,4 @@ def upload_exported_apps(*args, **kwargs) -> None:
         async_to_sync(_upload_app)(room_id, app_name)
 
         # remove the app after uploading (maybe we keep this?)
-        # os.remove(f"{settings.FRACTAL_EXPORT_DIR}/{app_name}")
+        # os.remove(f"{FRACTAL_EXPORT_DIR}/{app_name}")
