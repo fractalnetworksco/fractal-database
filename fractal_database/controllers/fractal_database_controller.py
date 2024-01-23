@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 import django
 import docker
 import docker.api.build
+import requests
 import toml
 from asgiref.sync import sync_to_async
 from clicz import cli_method
@@ -512,19 +513,37 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
             exit(1)
 
         os.chdir(db_name)
-        call_command("startapp", db_name)
+
+        import fractal_database
+
+        template_path = os.path.join(fractal_database.__path__[0], "app_template")  # type: ignore
+        call_command("startapp", "--template", template_path, db_name)
         init_poetry_project(db_name)
 
-        from fractal_database.models import Database
-        from fractal_database_matrix.models import MatrixReplicationTarget
+        from fractal_database.models import Database, Device
+        from fractal_database_matrix.models import (
+            MatrixCredentials,
+            MatrixReplicationTarget,
+        )
+
+        current_db = Database.current_db()
+        current_db_target: MatrixReplicationTarget = current_db.primary_target()  # type: ignore
 
         database = Database.objects.create(name=db_name)
         target = MatrixReplicationTarget.objects.create(
             name="matrix",
             database=database,
-            homeserver=Database.current_db().primary_target().homeserver,
+            homeserver=current_db_target.homeserver,
             primary=True,
-            access_token=Database.current_db().primary_target().access_token,
+        )
+        device, _ = Device.objects.get_or_create(
+            name=socket.gethostname(), defaults={"name": socket.gethostname()}
+        )
+        MatrixCredentials.objects.create(
+            matrix_id=current_db_target.matrixcredentials.matrix_id,
+            access_token=current_db_target.matrixcredentials.access_token,
+            target=target,
+            device=device,
         )
         database.schedule_replication(created=True, database=database)
 
@@ -799,9 +818,9 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
 
     @auth_required
     @cli_method
-    def download(self, mxc_uri: str, download_path: str = ".", verbose: bool = False):
+    def download_file(self, mxc_uri: str, download_path: str = ".", verbose: bool = False):
         """
-        Downloads the given app from the Matrix server and loads it into Docker.
+        Downloads the given app from the Matrix server.
         ---
         Args:
             mxc_uri: The mxc:// URI to download.
@@ -814,21 +833,40 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
             print(f"Failed to convert {mxc_uri} to an HTTP URL.")
             exit(1)
 
-        command = [
-            "curl",
-            "-o",
-            f"{download_path}/app.tar",
-        ]
+        res = requests.head(http_url, allow_redirects=True)
+
+        if disposition := res.headers.get("Content-Disposition"):
+            file_name = disposition.split("filename=")[1].strip('"')
+        else:
+            file_name = "app.tar.gz"
+
+        print(f"Downloading {http_url} to {os.path.abspath(download_path)}...")
+
+        command = ["curl", "-o", f"{download_path}/{file_name}"]
         if not verbose:
             command.append("-s")
 
-        print(f"Downloading app...")
-
         try:
-            subprocess.run([*command, http_url], check=True)
+            proc = subprocess.run([*command, http_url], check=True)
         except Exception as e:
             print(f"Failed to download {http_url}: {e}")
             exit(1)
+        import pdb
+
+        pdb.set_trace()
+
+    @auth_required
+    @cli_method
+    def download(self, mxc_uri: str, download_path: str = ".", verbose: bool = False):
+        """
+        Downloads the given app from the Matrix server and loads it into Docker.
+        ---
+        Args:
+            mxc_uri: The mxc:// URI to download.
+            download_path: The path to download the file to. Defaults to current directory.
+            verbose: Whether or not to print verbose output (Progress bar).
+        """
+        self.download_file(mxc_uri, download_path, verbose=verbose)
 
         # load the app into Docker
         try:
