@@ -281,13 +281,13 @@ def join_device_to_database(
         primary_target = instance.primary_target()
 
         creds = device.matrixcredentials_set.filter(
-            target__homeserver=primary_target.homeserver
+            target__homeserver=primary_target.homeserver  # type: ignore
         ).get()
 
         async_to_sync(_invite_device)(
             creds,
-            primary_target.metadata["room_id"],
-            primary_target.homeserver,
+            primary_target.metadata["room_id"],  # type: ignore
+            primary_target.homeserver,  # type: ignore
         )
 
 
@@ -369,7 +369,7 @@ def update_target_state(
         return None
     elif isinstance(instance, Database):
         target = instance.primary_target()
-        if not target:
+        if not target or not isinstance(target, MatrixReplicationTarget):
             logger.warning(
                 "Cannot update target state, no primary target found for database %s" % instance
             )
@@ -402,6 +402,10 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
 
     TODO: Figure out the end user interface for this. Should the user
     connect this signal in their app's ready function?
+    FIXME: Namespace packages (things like `mypackage.app` don't seem to
+    work correctly yet. These packages have dots in their names
+    and packages wont install correctly due to their name.
+    Ideally you would use `packages = [{include="mypackage"}]` instead.
     """
     app_path = sender.path
     app_name = sender.name
@@ -410,12 +414,13 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
     os.makedirs(settings.FRACTAL_EXPORT_DIR, exist_ok=True)
 
     with tarfile.open(f"{settings.FRACTAL_EXPORT_DIR}/{app_name}.tar.gz", "w:gz") as tar:
-        # extract everything excluding __pycache__ or any files that start with .
+        # extract everything excluding __pycache__ or any dirs/files that start with . or end with .pyc
         for root, dirs, files in os.walk(app_path):
-            dirs[:] = [d for d in dirs if d != "__pycache__" or not d.startswith(".")]
-            files = [f for f in files if not f.startswith(".")]
+            dirs[:] = [d for d in dirs if d != "__pycache__" and not d.startswith(".")]
+            files = [f for f in files if not f.startswith(".") and not f.endswith(".pyc")]
 
-            # Adjust the arcname to prefix with app_name
+            # Adjust the arcname to prefix with app_name so that the archive is
+            # extracted into a directory with the app name
             for file in files:
                 file_path = os.path.join(root, file)
                 tar.add(
@@ -428,7 +433,7 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
             if not os.path.exists(f"{app_path}/pyproject.toml"):
                 pyproject_file = init_poetry_project(app_name, in_memory=True)
                 tarinfo = tarfile.TarInfo("pyproject.toml")
-                tarinfo.size = len(pyproject_file.getvalue())
+                tarinfo.size = len(pyproject_file.getvalue())  # type: ignore
                 tar.addfile(tarinfo=tarinfo, fileobj=pyproject_file)
 
     logger.info("Created tarball of %s" % app_name)
@@ -479,3 +484,6 @@ def upload_exported_apps(*args, **kwargs) -> None:
             continue
         logger.info(f"Uploading {app_name} to {primary_target.homeserver}")
         async_to_sync(_upload_app)(room_id, app_name)
+
+        # remove the app after uploading (maybe we keep this?)
+        # os.remove(f"{settings.FRACTAL_EXPORT_DIR}/{app_name}")

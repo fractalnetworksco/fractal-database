@@ -1,6 +1,6 @@
 import logging
 from importlib import import_module
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from asgiref.sync import sync_to_async
@@ -15,13 +15,11 @@ from django.db.models.manager import BaseManager
 from fractal_database.exceptions import StaleObjectException
 from fractal_database.representations import Representation
 
-# TODO shouldn't be importing fractal_database_matrix stuff here
-# figure out a way to register representations on remote models from
-# fractal_database_matrix
-from fractal_database_matrix.representations import MatrixRoom
-
 from .fields import SingletonField
 from .signals import defer_replication
+
+if TYPE_CHECKING:
+    from fractal_database_matrix.models import MatrixCredentials
 
 logger = logging.getLogger(__name__)
 # to get console output from logger:
@@ -499,6 +497,9 @@ class App(ReplicatedModel):
 
 
 class Device(ReplicatedModel):
+    # type hint for MatrixCredentials reverse relation
+    matrixcredentials_set: BaseManager["MatrixCredentials"]
+
     name = models.CharField(max_length=255, unique=True)
     display_name = models.CharField(max_length=255, null=True, blank=True)
 
