@@ -406,7 +406,7 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
 
     TODO: Figure out the end user interface for this. Should the user
     connect this signal in their app's ready function?
-    FIXME: Namespace packages (things like `mypackage.app` don't seem to
+    FIXME: Namespace packages (things like `mypackage.app`) don't seem to
     work correctly yet. These packages have dots in their names
     and packages wont install correctly due to their name.
     Ideally you would use `packages = [{include="mypackage"}]` instead.
@@ -437,7 +437,7 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
             if not os.path.exists(f"{app_path}/pyproject.toml"):
                 pyproject_file = init_poetry_project(app_name, in_memory=True)
                 tarinfo = tarfile.TarInfo("pyproject.toml")
-                tarinfo.size = len(pyproject_file.getvalue())  # type: ignore
+                tarinfo.size = len(pyproject_file.getvalue())
                 tar.addfile(tarinfo=tarinfo, fileobj=pyproject_file)
 
     logger.info("Created tarball of %s" % app_name)

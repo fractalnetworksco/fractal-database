@@ -3,7 +3,7 @@ import io
 import logging
 import os
 import sys
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, overload
 
 import django
 import toml
@@ -59,6 +59,16 @@ def get_project_name():
         logger.warning("settings.PROJECT_NAME is not set. Defaulting to settings.BASE_DIR")
         project_name = os.path.basename(settings.BASE_DIR)
     return project_name
+
+
+@overload
+def init_poetry_project(project_name: str) -> None:  # pragma: no cover
+    ...
+
+
+@overload
+def init_poetry_project(project_name: str, in_memory: bool) -> io.BytesIO:  # pragma: no cover
+    ...
 
 
 def init_poetry_project(project_name: str, in_memory: bool = False) -> Optional[io.BytesIO]:
