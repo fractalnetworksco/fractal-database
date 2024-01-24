@@ -380,25 +380,16 @@ class FractalDatabaseController(AuthenticatedController):
             return None
 
         try:
+            import fractal_database
+
             # have to run in a subprocess instead of using call_command
             # due to the settings file being cached upon the first
             # invocation of call_command
-            subprocess.run(["django-admin", "startproject", project_name], check=True)  # type: ignore
+            template_path = os.path.join(fractal_database.__path__[0], "templates", "project_template")  # type: ignore
+            subprocess.run(["django-admin", "startproject", "--template", template_path, project_name], check=True)  # type: ignore
         except Exception as e:
             print(f'Error creating project "{project_name}" on your machine: {e}')
             exit(1)
-
-        suffix = f'PROJECT_NAME="{project_name}"\nFRACTAL_EXPORT_DIR=BASE_DIR / "exports"\n'
-        # add fractal_database to INSTALLED_APPS
-        if app:
-            to_write = f"INSTALLED_APPS += ['{app}', 'fractal_database_matrix', 'fractal_database']\n{suffix}\n"
-        else:
-            to_write = (
-                f"INSTALLED_APPS += ['fractal_database_matrix', 'fractal_database']\n{suffix}\n"
-            )
-
-        with open(f"{project_name}/{project_name}/settings.py", "a") as f:
-            f.write(to_write)
 
         # generate and apply initial migrations
         if not no_migrate:
@@ -516,7 +507,7 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
 
         import fractal_database
 
-        template_path = os.path.join(fractal_database.__path__[0], "app_template")  # type: ignore
+        template_path = os.path.join(fractal_database.__path__[0], "templates", "app_template")  # type: ignore
         call_command("startapp", "--template", template_path, db_name)
         init_poetry_project(db_name)
 

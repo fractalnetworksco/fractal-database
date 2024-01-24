@@ -19,7 +19,10 @@ from .fields import SingletonField
 from .signals import defer_replication
 
 if TYPE_CHECKING:
-    from fractal_database_matrix.models import MatrixCredentials
+    from fractal_database_matrix.models import (
+        MatrixCredentials,
+        MatrixReplicationTarget,
+    )
 
 logger = logging.getLogger(__name__)
 # to get console output from logger:
@@ -70,6 +73,7 @@ class DatabaseConfig(BaseModel):
 class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
+    replication_configs = GenericRelation("fractal_database.ReplicatedInstanceConfig")
     models = []
 
     class Meta:
@@ -87,6 +91,15 @@ class ReplicatedModel(BaseModel):
             except ObjectDoesNotExist:
                 pass
             super().save(*args, **kwargs)  # Call the "real" save() method.
+
+    def replication_targets(self) -> List["MatrixReplicationTarget"]:
+        configs = self.replication_configs.prefetch_related("matrixreplicationtarget_set").filter(
+            object_id=self.uuid
+        )
+        targets = []
+        for config in configs:
+            targets.extend(config.matrixreplicationtarget_set.all().distinct())
+        return targets
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
@@ -124,11 +137,17 @@ class ReplicatedModel(BaseModel):
 
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
+        targets.extend(self.replication_targets())
+
         repr_logs = None
         for target in targets:
             # pass this replicated model instance to the target's replication method
-            if created:
-                repr_logs = target.create_representation_logs(self)
+            if created or not target.metadata:
+                # only allow targets to create representations for themselves,
+                # targets should not create representations for other targets
+                # targets always use their own credentials
+                if isinstance(self, ReplicationTarget) and self == target:
+                    repr_logs = target.create_representation_logs(self)
             else:
                 print("Not creating repr for object: ", self)
 
@@ -195,6 +214,22 @@ class ReplicationLog(BaseModel):
         ]
 
 
+class ReplicatedInstanceConfig(ReplicatedModel):
+    """
+    Model that links an instance of a ReplicatedModel to a ReplicationTarget.
+    """
+
+    instance = GenericForeignKey()
+    object_id = models.CharField(max_length=255)
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        related_name="%(app_label)s_%(class)s_content_type",
+        blank=True,
+        null=True,
+    )
+
+
 class ReplicationTarget(ReplicatedModel):
     """
     Why replicate ReplicationTargets?
@@ -218,11 +253,14 @@ class ReplicationTarget(ReplicatedModel):
 
     name = models.CharField(max_length=255)
     enabled = models.BooleanField(default=True)
-    database = models.ForeignKey("fractal_database.Database", on_delete=models.CASCADE)
+    database = models.ForeignKey(
+        "fractal_database.Database", on_delete=models.CASCADE, null=True, blank=True
+    )
     # replication events are only consumed from the primary target for a database
     primary = models.BooleanField(default=False)
     # metadata is a map of properties that are specific to the target
     metadata = models.JSONField(default=dict)
+    instances = models.ManyToManyField("fractal_database.ReplicatedInstanceConfig")
 
     class Meta:
         # enforce that only one primary=True ReplicationTarget can exist per Database
@@ -256,7 +294,13 @@ class ReplicationTarget(ReplicatedModel):
             else:
                 return getattr(obj, attr_path)
 
-        metadata_props = {"uuid": "uuid", "name": "database.name"}
+        # if the target has a database, then the representation we create
+        # will use the database's name. Otherwise, we use the target's name.
+        if self.database:
+            metadata_props = {"uuid": "uuid", "name": "database.name"}
+        else:
+            metadata_props = {"uuid": "uuid", "name": "name"}
+
         return {
             prop_name: get_nested_attr(self, prop) for prop_name, prop in metadata_props.items()
         }
