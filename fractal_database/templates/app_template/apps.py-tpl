@@ -1,0 +1,11 @@
+from django.apps import AppConfig
+from django.db import models
+
+class {{ camel_case_app_name }}Config(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = '{{ app_name }}'
+
+    def ready(self) -> None:
+        from fractal_database.signals import zip_django_app
+
+        models.signals.post_migrate.connect(zip_django_app, sender=self)

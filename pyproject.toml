@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fractal-database"
-version = "0.0.3"
+version = "0.0.4"
 description = ""
 authors = ["Mo Balaa <balaa@fractalnetworks.co>"]
 readme = "README.md"
@@ -8,7 +8,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 fractal-cli = "^0.1.0"
-fractal-database-matrix = "^0.1.0"
+fractal-database-matrix = ">=0.1.0"
 django = "^5.0.0"
 
 
