@@ -545,10 +545,11 @@ class App(ReplicatedModel):
 
 class Device(ReplicatedModel):
     # type hint for MatrixCredentials reverse relation
-    matrixcredentials_set: BaseManager["MatrixCredentials"]
+    matrixcredentials_set: "MatrixCredentials"
 
     name = models.CharField(max_length=255, unique=True)
     display_name = models.CharField(max_length=255, null=True, blank=True)
+    owner_matrix_id = models.CharField(max_length=255, null=True, blank=True)
 
 
 class Snapshot(ReplicatedModel):

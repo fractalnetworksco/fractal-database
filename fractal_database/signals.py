@@ -211,7 +211,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
 
     creds = AuthenticatedController.get_creds()
     if creds:
-        access_token, homeserver_url, _ = creds
+        access_token, homeserver_url, owner_matrix_id = creds
     else:
         if not os.environ.get("MATRIX_HOMESERVER_URL") or not os.environ.get(
             "MATRIX_ACCESS_TOKEN"
@@ -238,7 +238,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     )
 
     device, _created = Device.objects.get_or_create(
-        name=socket.gethostname(), defaults={"name": socket.gethostname()}
+        name=socket.gethostname(), owner_matrix_id=owner_matrix_id, defaults={"name": socket.gethostname(), "owner_matrix_id": owner_matrix_id}
     )
     MatrixCredentials.objects.get_or_create(
         access_token=access_token,
