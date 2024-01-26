@@ -8,6 +8,7 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.conf import settings
 from django.core.serializers import serialize
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
@@ -30,7 +31,9 @@ logger = logging.getLogger(__name__)
 
 
 class BaseModel(models.Model):
-    uuid = models.UUIDField(primary_key=True, editable=False, default=uuid4)
+    if getattr(settings, "FRACTAL_DATABASE_UUID_PK", False):
+        id = models.UUIDField(primary_key=True, editable=False, default=uuid4)
+
     date_created = models.DateTimeField(auto_now_add=True)
     date_modified = models.DateTimeField(auto_now=True)
     deleted = models.BooleanField(default=False)
@@ -94,7 +97,7 @@ class ReplicatedModel(BaseModel):
 
     def replication_targets(self) -> List["MatrixReplicationTarget"]:
         configs = self.replication_configs.prefetch_related("matrixreplicationtarget_set").filter(
-            object_id=self.uuid
+            object_id=self.pk
         )
         targets = []
         for config in configs:
@@ -297,9 +300,9 @@ class ReplicationTarget(ReplicatedModel):
         # if the target has a database, then the representation we create
         # will use the database's name. Otherwise, we use the target's name.
         if self.database:
-            metadata_props = {"uuid": "uuid", "name": "database.name"}
+            metadata_props = {"pk": "pk", "name": "database.name"}
         else:
-            metadata_props = {"uuid": "uuid", "name": "name"}
+            metadata_props = {"pk": "pk", "name": "name"}
 
         return {
             prop_name: get_nested_attr(self, prop) for prop_name, prop in metadata_props.items()
@@ -381,13 +384,13 @@ class ReplicationTarget(ReplicatedModel):
 
     async def get_repl_logs_by_txn(self) -> List[BaseManager[ReplicationLog]]:
         txn_ids = (
-            ReplicationLog.objects.filter(target_id=self.uuid, deleted=False)
+            ReplicationLog.objects.filter(target_id=self.pk, deleted=False)
             .values_list("txn_id", flat=True)
             .distinct()
         )
         return [
             ReplicationLog.objects.filter(
-                txn_id=txn_id, deleted=False, target_id=self.uuid
+                txn_id=txn_id, deleted=False, target_id=self.pk
             ).order_by("date_created")
             async for txn_id in txn_ids
         ]
@@ -426,7 +429,7 @@ class RepresentationLog(BaseModel):
 
     async def apply(self) -> None:
         model: models.Model = self.content_type.model_class()  # type: ignore
-        instance = await model.objects.aget(uuid=self.object_id)
+        instance = await model.objects.aget(pk=self.object_id)
         repr_instance = self._get_repr_instance(self.method)
         print("Calling create_representation method on: ", repr_instance)
         metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore

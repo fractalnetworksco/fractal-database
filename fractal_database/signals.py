@@ -274,7 +274,7 @@ async def _invite_device(
 
 
 def join_device_to_database(
-    sender: "Database", instance: "Database", pk_set: list[UUID], **kwargs
+    sender: "Database", instance: "Database", pk_set: list[Any], **kwargs
 ) -> None:
     from fractal_database.models import Device
 
