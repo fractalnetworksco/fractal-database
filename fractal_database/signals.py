@@ -4,17 +4,16 @@ import socket
 import tarfile
 import threading
 from secrets import token_hex
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from asgiref.sync import async_to_sync
 from django.apps import AppConfig
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
+from django.db.models.signals import post_save
 from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name, init_poetry_project
-from nio import RoomPutStateError
 from taskiq_matrix.lock import MatrixLock
 
 logger = logging.getLogger("django")
@@ -115,6 +114,54 @@ def clear_deferred_replications(target: str) -> None:
     """
     logger.info("Clearing deferred replications for target %s" % target)
     del _thread_locals.defered_replications[target]
+
+
+def register_device_account(
+    sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
+) -> None:
+    from fractal_database.models import Database
+    from fractal_database_matrix.models import MatrixCredentials
+
+    # TODO: when loading from fixture, a device account should be created
+    # only if the device account doesn't already exist on the homeserver.
+    if not created or raw:
+        return None
+
+    logger.info("Registering device account for %s" % instance)
+
+    async def _register_device_account() -> tuple[str, str, str]:
+        from fractal.matrix import MatrixClient
+
+        async with MatrixClient(
+            homeserver_url=os.environ["MATRIX_HOMESERVER_URL"],
+            access_token=os.environ["MATRIX_ACCESS_TOKEN"],
+        ) as client:
+            registration_token = await client.generate_registration_token()
+            await client.whoami()
+            homeserver_name = client.user_id.split(":")[1]
+            matrix_id = f"@{instance.name}:{homeserver_name}"
+            password = token_hex(32)
+            access_token = await client.register_with_token(
+                matrix_id=matrix_id,
+                password=password,
+                registration_token=registration_token,
+                device_name=instance.display_name or instance.name,
+            )
+            return access_token, matrix_id, password
+
+    try:
+        access_token, matrix_id, password = async_to_sync(_register_device_account)()
+    except Exception as e:
+        logger.error(f"Error registering device account for {instance}: {e}")
+        return None
+
+    MatrixCredentials.objects.create(
+        matrix_id=matrix_id,
+        password=password,
+        access_token=access_token,
+        target=Database.current_db().primary_target(),
+        device=instance,
+    )
 
 
 def increment_version(sender, instance, **kwargs) -> None:
@@ -237,15 +284,23 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         },
     )
 
-    device, _created = Device.objects.get_or_create(
-        name=socket.gethostname(), owner_matrix_id=owner_matrix_id, defaults={"name": socket.gethostname(), "owner_matrix_id": owner_matrix_id}
-    )
-    MatrixCredentials.objects.get_or_create(
-        access_token=access_token,
-        target=target,
-        device=device,
-        defaults={"access_token": access_token, "target": target, "device": device},
-    )
+    # temporarily disable the device account registration signal so we can create the device account
+    # and create the MatrixCredentials object using the passed in credentials from the environment
+    post_save.disconnect(register_device_account, sender=Device)
+    try:
+        device, created = Device.objects.get_or_create(
+            name=socket.gethostname(),
+            owner_matrix_id=owner_matrix_id,
+            defaults={"name": socket.gethostname(), "owner_matrix_id": owner_matrix_id},
+        )
+        MatrixCredentials.objects.get_or_create(
+            access_token=access_token,
+            target=target,
+            device=device,
+            defaults={"access_token": access_token, "target": target, "device": device},
+        )
+    finally:
+        post_save.connect(register_device_account, sender=Device)
 
     # replicate the database now that we have a replication target
     database.schedule_replication()
@@ -294,47 +349,6 @@ def join_device_to_database(
             primary_target.metadata["room_id"],  # type: ignore
             primary_target.homeserver,  # type: ignore
         )
-
-
-def register_device_account(
-    sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
-) -> None:
-    from fractal_database.models import Database
-    from fractal_database_matrix.models import MatrixCredentials
-
-    if not created:
-        return None
-
-    logger.info("Registering device account for %s" % instance)
-
-    async def _register_device_account() -> tuple[str, str, str]:
-        from fractal.matrix import MatrixClient
-
-        async with MatrixClient(
-            homeserver_url=os.environ["MATRIX_HOMESERVER_URL"],
-            access_token=os.environ["MATRIX_ACCESS_TOKEN"],
-        ) as client:
-            registration_token = await client.generate_registration_token()
-            await client.whoami()
-            homeserver_name = client.user_id.split(":")[1]
-            matrix_id = f"@{instance.name}:{homeserver_name}"
-            password = token_hex(32)
-            access_token = await client.register_with_token(
-                matrix_id=matrix_id,
-                password=password,
-                registration_token=registration_token,
-                device_name=instance.display_name or instance.name,
-            )
-            return access_token, matrix_id, password
-
-    access_token, matrix_id, password = async_to_sync(_register_device_account)()
-    MatrixCredentials.objects.create(
-        matrix_id=matrix_id,
-        password=password,
-        access_token=access_token,
-        target=Database.current_db().primary_target(),
-        device=instance,
-    )
 
 
 async def _lock_and_put_state(

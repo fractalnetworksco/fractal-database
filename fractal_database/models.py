@@ -5,10 +5,10 @@ from uuid import uuid4
 
 from asgiref.sync import sync_to_async
 from django.apps import apps
+from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.conf import settings
 from django.core.serializers import serialize
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
@@ -550,6 +550,11 @@ class Device(ReplicatedModel):
     name = models.CharField(max_length=255, unique=True)
     display_name = models.CharField(max_length=255, null=True, blank=True)
     owner_matrix_id = models.CharField(max_length=255, null=True, blank=True)
+
+
+# class DeviceDatabaseConfig(ReplicatedModel):
+#     device = models.ForeignKey(Device, on_delete=models.CASCADE)
+#     database = models.ForeignKey(Database, on_delete=models.CASCADE)
 
 
 class Snapshot(ReplicatedModel):

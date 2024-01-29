@@ -10,10 +10,11 @@ class FractalDatabaseConfig(AppConfig):
     name = "fractal_database"
 
     def ready(self):
-        from fractal_database.models import Database, ReplicatedModel
+        from fractal_database.models import Database, Device, ReplicatedModel
         from fractal_database.signals import (
             create_database_and_matrix_replication_target,
             join_device_to_database,
+            register_device_account,
             upload_exported_apps,
         )
 
@@ -34,6 +35,7 @@ class FractalDatabaseConfig(AppConfig):
             )
 
         models.signals.post_migrate.connect(upload_exported_apps, sender=self)
+        models.signals.post_save.connect(register_device_account, sender=Device)
 
     @staticmethod
     def _assert_installation_order():
