@@ -59,6 +59,9 @@ class DatabaseConfig(BaseModel):
     Model for storing the local database configuration.
     """
 
+    current_device = models.ForeignKey(
+        "fractal_database.Device", on_delete=models.CASCADE, null=True, blank=True
+    )
     current_db = models.ForeignKey("fractal_database.Database", on_delete=models.CASCADE)
     singleton = SingletonField(unique=True, default=True)
 
@@ -278,6 +281,9 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
+    def get_creds(self) -> Any:
+        return None
+
     def repr_metadata_props(self) -> Dict[str, str]:
         """
         Returns the representation metadata properties for this target.
@@ -450,6 +456,7 @@ class Database(ReplicatedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     devices = models.ManyToManyField("fractal_database.Device")
+    is_root = models.BooleanField(default=False)
 
     def __str__(self) -> str:
         return self.name
@@ -459,8 +466,8 @@ class Database(ReplicatedModel):
         Returns the primary replication target for this database.
         """
         for subclass in ReplicationTarget.__subclasses__():
-            target = subclass.objects.filter(database=self, primary=True).select_related(
-                "matrixcredentials"
+            target = subclass.objects.filter(database=self, primary=True).prefetch_related(
+                "matrixcredentials_set"
             )
             if target.exists():
                 return target[0]
@@ -500,6 +507,25 @@ class Database(ReplicatedModel):
         Returns the current database.
         """
         return await sync_to_async(cls.current_db)()
+
+    @classmethod
+    def current_device(cls) -> "Device":
+        """
+        Returns the current device.
+        """
+        return (
+            DatabaseConfig.objects.select_related("current_device")
+            .prefetch_related("current_device__matrixcredentials_set")
+            .get()
+            .current_device
+        )
+
+    @classmethod
+    async def acurrent_device(cls) -> "Device":
+        """
+        Returns the current device.
+        """
+        return await sync_to_async(cls.current_device)()
 
 
 class AppCatalog(ReplicatedModel):
@@ -550,6 +576,9 @@ class Device(ReplicatedModel):
     name = models.CharField(max_length=255, unique=True)
     display_name = models.CharField(max_length=255, null=True, blank=True)
     owner_matrix_id = models.CharField(max_length=255, null=True, blank=True)
+
+    def __str__(self) -> str:
+        return str([cred.matrix_id for cred in self.matrixcredentials_set.all()])
 
 
 # class DeviceDatabaseConfig(ReplicatedModel):
