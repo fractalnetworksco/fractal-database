@@ -321,9 +321,6 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
 async def _accept_invite(
     device_creds: "MatrixCredentials", database_room_id: str, homeserver_url: str
 ):
-    import pdb
-
-    pdb.set_trace()
     device_matrix_id = device_creds.matrix_id
     # accept invite on behalf of device
     async with MatrixClient(
