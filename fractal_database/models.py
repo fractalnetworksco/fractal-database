@@ -87,16 +87,19 @@ class ReplicatedModel(BaseModel):
 
     def save(self, *args, **kwargs):
         """
-        Gaurds on the object version to ensure that the object version is incremented monotonically
+        Guards on the object version to ensure that the object version is incremented monotonically
         """
-        with transaction.atomic():
-            try:
-                current = type(self).objects.select_for_update().get(pk=self.pk)
-                if self.object_version + 1 <= current.object_version:
-                    raise StaleObjectException()
-            except ObjectDoesNotExist:
-                pass
-            super().save(*args, **kwargs)  # Call the "real" save() method.
+        if not transaction.get_connection().in_atomic_block:
+            with transaction.atomic():
+                return self.save(*args, **kwargs)
+
+        try:
+            current = type(self).objects.select_for_update().get(pk=self.pk)
+            if self.object_version + 1 <= current.object_version:
+                raise StaleObjectException()
+        except ObjectDoesNotExist:
+            pass
+        super().save(*args, **kwargs)  # Call the "real" save() method.
 
     def replication_targets(self) -> List["MatrixReplicationTarget"]:
         configs = self.replication_configs.prefetch_related("matrixreplicationtarget_set").filter(

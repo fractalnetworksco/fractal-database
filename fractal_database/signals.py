@@ -151,10 +151,9 @@ def register_device_account(
             registration_token = await client.generate_registration_token()
             await client.whoami()
             homeserver_name = client.user_id.split(":")[1]
-            # FIXME: should use the pk here or a piece of the pk?
-            import uuid
-
             matrix_id = f"@{instance.name}:{homeserver_name}"
+            # FIXME: prompt for user master password here so that we can
+            # deterministically generate the device password
             password = token_hex(32)
             access_token = await client.register_with_token(
                 matrix_id=matrix_id,
