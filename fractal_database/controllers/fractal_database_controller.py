@@ -76,7 +76,7 @@ class FractalDatabaseController(AuthenticatedController):
                 raise Exception(res.message)
             try:
                 database_fixture = json.loads(res.content["fixture"])[0]
-                database_uuid = database_fixture["pk"]
+                database_pk = database_fixture["pk"]
             except Exception as e:
                 raise Exception(f"Failed to parse database fixture: {e}")
             fixture.append(database_fixture)
@@ -89,7 +89,7 @@ class FractalDatabaseController(AuthenticatedController):
             except Exception as e:
                 raise Exception(f"Failed to parse target fixture: {e}")
 
-            added_target_uuid = target_fixture["pk"]
+            added_target_pk = target_fixture["pk"]
             fixture.append(target_fixture)
 
         from fractal_database.replication.tasks import replicate_fixture
@@ -112,7 +112,7 @@ class FractalDatabaseController(AuthenticatedController):
 
             # if current database is the same as the one we are syncing, return
             # (dont want to create a representation for the same database)
-            if database_uuid == str(database.uuid):
+            if database_pk == str(database.pk):
                 return None
 
         except DatabaseConfig.DoesNotExist:
@@ -122,7 +122,7 @@ class FractalDatabaseController(AuthenticatedController):
                 Initialize an instance database
                 """
                 with transaction.atomic():
-                    database = Database.objects.get(uuid=database_uuid)
+                    database = Database.objects.get(pk=database_pk)
                     DatabaseConfig.objects.create(current_db=database)
                     device = Device.objects.create(name=os.environ["FRACTAL_DEVICE_NAME"])
                     MatrixCredentials.objects.create(
@@ -137,7 +137,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         target = await database.aprimary_target()
         target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
-            uuid=added_target_uuid
+            pk=added_target_pk
         )
         repr_log = await sync_to_async(MatrixExistingSubSpace.create_representation_logs)(
             target_to_add, target

@@ -1,10 +1,15 @@
+import socket
+import json
 import os
 import sys
 
 from django.core.exceptions import ObjectDoesNotExist
+from fractal.matrix.async_client import MatrixClient
+from asgiref.sync import async_to_sync
 from django.core.management.base import BaseCommand, CommandError
-from fractal_database.models import Database
-from fractal_database_matrix.models import MatrixReplicationTarget
+from fractal_database.models import Database, Device, DatabaseConfig
+from fractal_database_matrix.models import MatrixReplicationTarget, MatrixCredentials
+from nio import RoomGetStateEventError
 
 
 class Command(BaseCommand):
@@ -13,6 +18,54 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         # Add command arguments here (optional)
         pass
+
+    async def _init_instance_db(self, access_token: str, homeserver_url: str, room_id: str):
+        try:
+            database = await Database.acurrent_db()
+            # FIXME: Make sure this is right
+            print(f"Already have database {database} configured.")
+            return
+        except ObjectDoesNotExist:
+            pass
+
+        # pull in database from room state
+        async with MatrixClient(homeserver_url, access_token) as client:
+            db_state_res = await client.room_get_state_event(room_id, "f.database")
+            if isinstance(db_state_res, RoomGetStateEventError):
+                raise CommandError(
+                    f"Failed to get database configuration from room state: {db_state_res.message}"
+                )
+            target_state_res = await client.room_get_state_event(room_id, "f.database")
+            if isinstance(target_state_res, RoomGetStateEventError):
+                raise CommandError(
+                    f"Failed to get database configuration from room state: {target_state_res.message}"
+                )
+            # FIXME: Put into own function
+            from fractal_database_matrix.broker import broker
+            broker._init_queues()
+            broker.replication_queue.checkpoint.since_token = None
+            from fractal_database.replication.tasks import replicate_fixture
+            fixture_str = db_state_res.content['fixture']
+            fixture = json.loads(fixture_str)
+            await replicate_fixture(fixture)
+            fixture_str = target_state_res.content['fixture']
+            fixture = json.loads(fixture_str)
+            await replicate_fixture(fixture)
+
+        database = await Database.objects.aget(pk=fixture["pk"])
+        target = await database.aprimary_target()
+
+        await DatabaseConfig.objects.acreate(current_db=database)
+
+        device, _created = Device.objects.get_or_create(
+            name=socket.gethostname(), defaults={"name": socket.gethostname()}
+        )
+        MatrixCredentials.objects.get_or_create(
+            # access_token=access_token,
+            target=target,
+            # device=device,
+            defaults={"access_token": access_token, "target": target, "device": device},
+        )
 
     def handle(self, *args, **options):
         if not os.environ.get("MATRIX_ROOM_ID"):
@@ -41,6 +94,8 @@ class Command(BaseCommand):
                 raise CommandError(
                     f"Missing environment variable {e}. Have you configured the MatrixReplicationTarget?"
                 ) from e
+
+            async_to_sync(self._init_instance_db)(access_token, homeserver_url, room_id)
 
         settings_module = os.environ.get("DJANGO_SETTINGS_MODULE")
 

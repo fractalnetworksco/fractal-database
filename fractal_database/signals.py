@@ -4,17 +4,16 @@ import socket
 import tarfile
 import threading
 from secrets import token_hex
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from asgiref.sync import async_to_sync
 from django.apps import AppConfig
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
+from django.db.models.signals import post_save
 from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name, init_poetry_project
-from nio import RoomPutStateError
 from taskiq_matrix.lock import MatrixLock
 
 logger = logging.getLogger("django")
@@ -117,6 +116,64 @@ def clear_deferred_replications(target: str) -> None:
     del _thread_locals.defered_replications[target]
 
 
+def register_device_account(
+    sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
+) -> None:
+    """
+    TODO: This should become a task, so that if it fails we know about it and
+    aren't left in a weird state.
+    """
+    from fractal.cli.controllers.auth import AuthenticatedController
+    from fractal_database.models import Database
+    from fractal_database_matrix.models import MatrixCredentials
+
+    # TODO: when loading from fixture, a device account should be created
+    # only if the device account doesn't already exist on the homeserver.
+    if not created or raw:
+        return None
+
+    logger.info("Registering device account for %s" % instance)
+
+    async def _register_device_account() -> tuple[str, str, str]:
+        from fractal.matrix import MatrixClient
+
+        creds = AuthenticatedController.get_creds()
+        if creds:
+            access_token, homeserver_url, _ = creds
+        else:
+            access_token = os.environ["MATRIX_ACCESS_TOKEN"]
+            homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
+
+        async with MatrixClient(
+            homeserver_url=homeserver_url,
+            access_token=access_token,
+        ) as client:
+            registration_token = await client.generate_registration_token()
+            await client.whoami()
+            homeserver_name = client.user_id.split(":")[1]
+            matrix_id = f"@{instance.name}:{homeserver_name}"
+            # FIXME: prompt for user master password here so that we can
+            # deterministically generate the device password
+            password = token_hex(32)
+            access_token = await client.register_with_token(
+                matrix_id=matrix_id,
+                password=password,
+                registration_token=registration_token,
+                device_name=instance.display_name or instance.name,
+            )
+            return access_token, matrix_id, password
+
+    access_token, matrix_id, password = async_to_sync(_register_device_account)()
+
+    MatrixCredentials.objects.create(
+        matrix_id=matrix_id,
+        password=password,
+        access_token=access_token,
+        target=Database.current_db().primary_target(),
+        device=instance,
+    )
+
+
 def increment_version(sender, instance, **kwargs) -> None:
     """
     Increments the object version and updates the last_updated_by field to the
@@ -190,12 +247,14 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
 
     database, _ = Database.objects.get_or_create(
         name=project_name,
+        is_root=True,
         defaults={
             "name": project_name,
         },
     )
 
-    DatabaseConfig.objects.get_or_create(
+    # TODO: This needs to also happen in an instance db. Move this to another signal?
+    current_db_config, _ = DatabaseConfig.objects.get_or_create(
         current_db=database,
         defaults={
             "current_db": database,
@@ -211,10 +270,12 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
 
     creds = AuthenticatedController.get_creds()
     if creds:
-        access_token, homeserver_url, _ = creds
+        access_token, homeserver_url, owner_matrix_id = creds
     else:
-        if not os.environ.get("MATRIX_HOMESERVER_URL") or not os.environ.get(
-            "MATRIX_ACCESS_TOKEN"
+        if (
+            not os.environ.get("MATRIX_HOMESERVER_URL")
+            or not os.environ.get("MATRIX_ACCESS_TOKEN")
+            or not os.environ.get("MATRIX_OWNER_MATRIX_ID")
         ):
             logger.info(
                 "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixReplicationTarget creation"
@@ -222,6 +283,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
             return
         # make sure the appropriate matrix env vars are set
         homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
+        owner_matrix_id = os.environ["MATRIX_OWNER_MATRIX_ID"]
         # TODO move access_token to a non-replicated model
         access_token = os.environ["MATRIX_ACCESS_TOKEN"]
 
@@ -237,33 +299,28 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         },
     )
 
-    device, _created = Device.objects.get_or_create(
-        name=socket.gethostname(), defaults={"name": socket.gethostname()}
+    device_name = f"{socket.gethostname()}_{token_hex(4)}".lower()
+    device, created = Device.objects.get_or_create(
+        name=device_name,
+        owner_matrix_id=owner_matrix_id,
+        display_name=device_name,
+        defaults={
+            "name": device_name,
+            "owner_matrix_id": owner_matrix_id,
+            "display_name": device_name,
+        },
     )
-    MatrixCredentials.objects.get_or_create(
-        access_token=access_token,
-        target=target,
-        device=device,
-        defaults={"access_token": access_token, "target": target, "device": device},
-    )
+    current_db_config.update(current_device=device)
+    database.devices.add(device)
 
     # replicate the database now that we have a replication target
     database.schedule_replication()
 
 
-async def _invite_device(
+async def _accept_invite(
     device_creds: "MatrixCredentials", database_room_id: str, homeserver_url: str
-) -> None:
-    access_token = os.environ.get("MATRIX_ACCESS_TOKEN")
+):
     device_matrix_id = device_creds.matrix_id
-
-    async with MatrixClient(
-        homeserver_url=homeserver_url,
-        access_token=access_token,
-    ) as client:
-        logger.info("Inviting %s to %s" % (device_matrix_id, database_room_id))
-        await client.invite(user_id=device_matrix_id, room_id=database_room_id, admin=True)
-
     # accept invite on behalf of device
     async with MatrixClient(
         homeserver_url=homeserver_url,
@@ -273,68 +330,65 @@ async def _invite_device(
         await client.join_room(database_room_id)
 
 
-def join_device_to_database(
-    sender: "Database", instance: "Database", pk_set: list[UUID], **kwargs
+async def _invite_device(
+    device_creds: "MatrixCredentials", database_room_id: str, homeserver_url: str
 ) -> None:
-    from fractal_database.models import Device
+    from fractal.cli.controllers.auth import AuthenticatedController
+
+    # TODO: Once user has accounts on many homeservers, we need to try all
+    # creds until we find the one that works.
+    creds = AuthenticatedController.get_creds()
+    if creds:
+        access_token, user_homeserver_url, owner_matrix_id = creds
+    access_token = os.environ.get("MATRIX_ACCESS_TOKEN")
+    device_matrix_id = device_creds.matrix_id
+
+    async with MatrixClient(
+        homeserver_url=user_homeserver_url,
+        access_token=access_token,
+    ) as client:
+        logger.info("Inviting %s to %s" % (device_matrix_id, database_room_id))
+        await client.invite(user_id=device_matrix_id, room_id=database_room_id, admin=True)
+
+
+def join_device_to_database(
+    sender: "Database", instance: "Database", pk_set: list[Any], **kwargs
+) -> None:
+    """
+    When a new device is added to a database, this signal sends an invite
+    to the added device and automatically accepts it.
+    """
+    from fractal_database.models import Database, Device
 
     if kwargs["action"] != "post_add":
         return None
 
+    current_device = Database.current_device()
+
     for device_id in pk_set:
+        # dont send an invite if the device is the current device
+        # since the current device is invited in create_representation
+        if device_id == current_device.pk:
+            continue
+
         device = Device.objects.get(pk=device_id)
         primary_target = instance.primary_target()
 
-        creds = device.matrixcredentials_set.filter(
+        device_creds = device.matrixcredentials_set.filter(
             target__homeserver=primary_target.homeserver  # type: ignore
         ).get()
 
         async_to_sync(_invite_device)(
-            creds,
+            device_creds,
             primary_target.metadata["room_id"],  # type: ignore
             primary_target.homeserver,  # type: ignore
         )
-
-
-def register_device_account(
-    sender: "Device", instance: "Device", created: bool, raw: bool, **kwargs
-) -> None:
-    from fractal_database.models import Database
-    from fractal_database_matrix.models import MatrixCredentials
-
-    if not created:
-        return None
-
-    logger.info("Registering device account for %s" % instance)
-
-    async def _register_device_account() -> tuple[str, str, str]:
-        from fractal.matrix import MatrixClient
-
-        async with MatrixClient(
-            homeserver_url=os.environ["MATRIX_HOMESERVER_URL"],
-            access_token=os.environ["MATRIX_ACCESS_TOKEN"],
-        ) as client:
-            registration_token = await client.generate_registration_token()
-            await client.whoami()
-            homeserver_name = client.user_id.split(":")[1]
-            matrix_id = f"@{instance.name}:{homeserver_name}"
-            password = token_hex(32)
-            access_token = await client.register_with_token(
-                matrix_id=matrix_id,
-                password=password,
-                registration_token=registration_token,
-                device_name=instance.display_name or instance.name,
-            )
-            return access_token, matrix_id, password
-
-    access_token, matrix_id, password = async_to_sync(_register_device_account)()
-    MatrixCredentials.objects.create(
-        matrix_id=matrix_id,
-        password=password,
-        access_token=access_token,
-        target=Database.current_db().primary_target(),
-        device=instance,
-    )
+        async_to_sync(_accept_invite)(
+            device_creds,
+            primary_target.metadata["room_id"],  # type: ignore
+            primary_target.homeserver,  # type: ignore
+        )
+        # accept invite on behalf of device
 
 
 async def _lock_and_put_state(
@@ -347,9 +401,15 @@ async def _lock_and_put_state(
     """
     Acquires a lock for the given state_type and puts the state in the provided room.
     """
-    async with MatrixLock(target.homeserver, target.matrixcredentials.access_token, room_id).lock(
-        key=state_type
-    ) as lock_id:
+    from fractal.cli.controllers.auth import AuthenticatedController
+
+    creds = AuthenticatedController.get_creds()
+    if creds:
+        access_token, homeserver_url, owner_matrix_id = creds
+    else:
+        raise Exception("No creds found not locking and putting state")
+
+    async with MatrixLock(homeserver_url, access_token, room_id).lock(key=state_type) as lock_id:
         await repr_instance.put_state(room_id, target, state_type, content)
 
 
@@ -393,7 +453,7 @@ def update_target_state(
     state_type = "f.database" if isinstance(instance, Database) else "f.database.target"
     # put state needs the matrix credentials for the target so accessing the creds here
     # ensures that the creds are loaded into memory (avoiding lazy loading issues in async)
-    target.matrixcredentials
+    # target.matrixcredentials_set
 
     async_to_sync(_lock_and_put_state)(
         repr_instance, room_id, target, state_type, {"fixture": instance_fixture}
@@ -467,9 +527,10 @@ def upload_exported_apps(*args, **kwargs) -> None:
     repr_instance = RepresentationLog._get_repr_instance(representation_module)
 
     async def _upload_app(room_id: str, app: str) -> None:
+        creds = primary_target.get_creds()
         async with MatrixClient(
             homeserver_url=primary_target.homeserver,
-            access_token=primary_target.matrixcredentials.access_token,
+            access_token=creds.access_token,
         ) as client:
             mxc_uri = await client.upload_file(
                 f"{FRACTAL_EXPORT_DIR}/{app}",
