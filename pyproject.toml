@@ -7,10 +7,8 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-# depending on the git version for now since the package is not published yet
-fractal-cli = { git = "https://github.com/fractalnetworksco/fractal-cli.git", branch = "main" }
-# depending on the git version for now since the package is not published yet
-fractal-database-matrix = { git = "https://github.com/fractalnetworksco/fractal-database-matrix.git", branch = "main" }
+fractal-cli = ">=0.0.1"
+fractal-database-matrix = ">=0.0.1"
 django = ">=5.0.0"
 
 
