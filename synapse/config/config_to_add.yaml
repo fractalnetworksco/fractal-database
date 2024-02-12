@@ -1,0 +1,18 @@
+
+enable_registration: true
+registration_requires_token: true
+presence_enabled: false
+max_upload_size: 5000M
+
+# increasing default rate limiting burst counts to avoid tests hanging for unauthenticated
+# requtests to login
+rc_login:
+  address:
+    per_second: 0.15
+    burst_count: 656565
+  account:
+    per_second: 0.18
+    burst_count: 656565
+  failed_attempts:
+    per_second: 0.19
+    burst_count: 656565

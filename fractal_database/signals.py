@@ -250,6 +250,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         is_root=True,
         defaults={
             "name": project_name,
+            "is_root": True
         },
     )
 
