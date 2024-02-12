@@ -1,4 +1,5 @@
 import logging
+import traceback
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from uuid import uuid4
@@ -284,6 +285,9 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
+    def get_content_type(self) -> ContentType:
+        return ContentType.objects.get_for_model(self.__class__)
+
     def get_creds(self) -> Any:
         return None
 
@@ -338,9 +342,11 @@ class ReplicationTarget(ReplicatedModel):
             fixture = []
             logger.debug("Querying for representation logs...")
             async for log in queryset:
-                async for repr_log in log.repr_logs.select_related(
-                    "content_type", "target_type"
-                ).filter(deleted=False).order_by("date_created"):
+                async for repr_log in (
+                    log.repr_logs.select_related("content_type", "target_type")
+                    .filter(deleted=False)
+                    .order_by("date_created")
+                ):
                     try:
                         print("Calling apply for repr log: ", repr_log)
                         await repr_log.apply()
@@ -393,13 +399,18 @@ class ReplicationTarget(ReplicatedModel):
 
     async def get_repl_logs_by_txn(self) -> List[BaseManager[ReplicationLog]]:
         txn_ids = (
-            ReplicationLog.objects.filter(target_id=self.pk, deleted=False)
+            ReplicationLog.objects.filter(
+                target_id=self.pk, target_type=self.get_content_type(), deleted=False
+            )
             .values_list("txn_id", flat=True)
             .distinct()
         )
         return [
             ReplicationLog.objects.filter(
-                txn_id=txn_id, deleted=False, target_id=self.pk
+                txn_id=txn_id,
+                deleted=False,
+                target_id=self.pk,
+                target_type=self.get_content_type(),
             ).order_by("date_created")
             async for txn_id in txn_ids
         ]
@@ -581,7 +592,8 @@ class Device(ReplicatedModel):
     owner_matrix_id = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self) -> str:
-        return str([cred.matrix_id for cred in self.matrixcredentials_set.all()])
+        return self.name
+        # return str([cred.matrix_id for cred in self.matrixcredentials_set.all()])
 
 
 # class DeviceDatabaseConfig(ReplicatedModel):

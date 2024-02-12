@@ -3,6 +3,7 @@ import os
 from django.apps import AppConfig
 from django.conf import settings
 from django.db import models
+from django.db.models.fields.related import ManyToManyField, ManyToManyRel
 
 
 class FractalDatabaseConfig(AppConfig):
@@ -15,6 +16,7 @@ class FractalDatabaseConfig(AppConfig):
             create_database_and_matrix_replication_target,
             join_device_to_database,
             register_device_account,
+            schedule_replication_on_m2m_change,
             upload_exported_apps,
         )
 
@@ -36,6 +38,30 @@ class FractalDatabaseConfig(AppConfig):
 
         models.signals.post_migrate.connect(upload_exported_apps, sender=self)
         models.signals.post_save.connect(register_device_account, sender=Device)
+
+        # automatically connect schedule replication signal for replicated models that have
+        # many to many fields on them.
+        for model in ReplicatedModel.models:
+            for field in model._meta.get_fields():
+                # skip fields that aren't many to many
+                if not isinstance(field, ManyToManyField) and not isinstance(
+                    field, ManyToManyRel
+                ):
+                    continue
+
+                if isinstance(field, ManyToManyField):
+                    field_name = field.name
+                elif isinstance(field, ManyToManyRel):
+                    if field.related_name:
+                        field_name = field.related_name
+                    else:
+                        field_name = f"{field.name}_set"
+
+                through = getattr(model, field_name).through
+                if through is not None:
+                    models.signals.m2m_changed.connect(
+                        schedule_replication_on_m2m_change, sender=through
+                    )
 
     @staticmethod
     def _assert_installation_order():

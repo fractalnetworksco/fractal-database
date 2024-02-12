@@ -132,7 +132,7 @@ def register_device_account(
     if not created or raw:
         return None
 
-    logger.info("Registering device account for %s" % instance)
+    logger.info("Registering device account for %s" % instance.name)
 
     async def _register_device_account() -> tuple[str, str, str]:
         from fractal.matrix import MatrixClient
@@ -219,6 +219,35 @@ def object_post_save(
 
     finally:
         exit_signal_handler()
+
+
+def schedule_replication_on_m2m_change(
+    sender: "ReplicatedModel",
+    instance: "ReplicatedModel",
+    action: str,
+    reverse: bool,
+    model: "ReplicatedModel",
+    pk_set: list[Any],
+    **kwargs,
+) -> None:
+    """
+    Calls schedule replication on the instance (and its reverse relations) whenever a many to many field is changed.
+
+    Connected via fractal_database.apps.FractalDatabaseConfig.ready
+    """
+    if action not in {"post_add", "post_remove"}:
+        return None
+
+    print(f"Inside schedule_replication_on_m2m_change: {instance}")
+    for id in pk_set:
+        if reverse:
+            related_instance = model.objects.get(pk=id)
+            instance.schedule_replication(created=False)
+            related_instance.schedule_replication(created=False)
+        else:
+            related_instance = instance
+            related_instance.save()
+            # related_instance.schedule_replication(created=False)
 
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
@@ -314,7 +343,9 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     database.devices.add(device)
 
     # replicate the database now that we have a replication target
-    database.schedule_replication()
+    print(f"Replicating after adding device to database")
+    database.save()
+    # database.schedule_replication()
 
 
 async def _accept_invite(
