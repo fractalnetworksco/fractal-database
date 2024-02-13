@@ -40,6 +40,7 @@ except:
 
 def enter_signal_handler():
     """Increments the counter indicating we've entered a new signal handler."""
+    print('right here============', hasattr(_thread_locals, "signal_nesting_count"))
     if not hasattr(_thread_locals, "signal_nesting_count"):
         _thread_locals.signal_nesting_count = 0
     _thread_locals.signal_nesting_count += 1

@@ -14,7 +14,7 @@ test:
 	export PYTHONPATH="test-config/test_project" && pytest -k ${TEST} -s --cov-config=.coveragerc --cov=fractal_database -v --asyncio-mode=auto --cov-report=lcov --cov-report=term tests/
 
 qtest:
-	pytest -k ${TEST} -s --cov-config=.coveragerc --cov=fractal_database --asyncio-mode=auto --cov-report=lcov tests/
+	export PYTHONPATH="test-config/test_project" && pytest -k ${TEST} -s --cov-config=.coveragerc --cov=fractal_database --asyncio-mode=auto --cov-report=lcov tests/
 
 synapse:
 	docker compose -f ./synapse/docker-compose.yml up synapse -d --force-recreate --build
