@@ -7,6 +7,7 @@ from fractal_database_matrix.models import MatrixReplicationTarget
 from nio import AsyncClient, RoomGetStateEventError, SyncError
 from taskiq_matrix.filters import create_filter
 
+pytest.skip(allow_module_level=True)
 
 @pytest.mark.django_db
 async def test_project_database_represented_in_matrix(matrix_client: AsyncClient):

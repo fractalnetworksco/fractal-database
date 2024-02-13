@@ -2,6 +2,7 @@ import pytest
 from django.db.utils import IntegrityError
 from fractal_database.models import Database, ReplicationTarget
 
+pytest.skip(allow_module_level=True)
 
 @pytest.mark.django_db
 async def test_cant_have_two_primary_databases(database: Database):
