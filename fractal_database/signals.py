@@ -11,12 +11,11 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
-from django.db.models.signals import post_save
 from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name, init_poetry_project
 from taskiq_matrix.lock import MatrixLock
 
-logger = logging.getLogger("django")
+logger = logging.getLogger(__name__)
 
 _thread_locals = threading.local()
 
@@ -132,7 +131,7 @@ def register_device_account(
     if not created or raw:
         return None
 
-    logger.info("Registering device account for %s" % instance)
+    logger.info("Registering device account for %s" % instance.name)
 
     async def _register_device_account() -> tuple[str, str, str]:
         from fractal.matrix import MatrixClient
@@ -221,6 +220,35 @@ def object_post_save(
         exit_signal_handler()
 
 
+def schedule_replication_on_m2m_change(
+    sender: "ReplicatedModel",
+    instance: "ReplicatedModel",
+    action: str,
+    reverse: bool,
+    model: "ReplicatedModel",
+    pk_set: list[Any],
+    **kwargs,
+) -> None:
+    """
+    Calls schedule replication on the instance (and its reverse relations) whenever a many to many field is changed.
+
+    Connected via fractal_database.apps.FractalDatabaseConfig.ready
+    """
+    if action not in {"post_add", "post_remove"}:
+        return None
+
+    print(f"Inside schedule_replication_on_m2m_change: {instance}")
+    for id in pk_set:
+        if reverse:
+            related_instance = model.objects.get(pk=id)
+            instance.schedule_replication(created=False)
+            related_instance.schedule_replication(created=False)
+        else:
+            related_instance = instance
+            related_instance.save()
+            # related_instance.schedule_replication(created=False)
+
+
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     """
     Runs on post_migrate signal to setup the MatrixReplicationTarget for the
@@ -250,6 +278,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         is_root=True,
         defaults={
             "name": project_name,
+            "is_root": True,
         },
     )
 
@@ -314,7 +343,9 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     database.devices.add(device)
 
     # replicate the database now that we have a replication target
-    database.schedule_replication()
+    print(f"Replicating after adding device to database")
+    database.save()
+    # database.schedule_replication()
 
 
 async def _accept_invite(
@@ -409,7 +440,7 @@ async def _lock_and_put_state(
     else:
         raise Exception("No creds found not locking and putting state")
 
-    async with MatrixLock(homeserver_url, access_token, room_id).lock(key=state_type) as lock_id:
+    async with MatrixLock(homeserver_url, access_token, room_id).lock(key=state_type) as lock_id:  # type: ignore
         await repr_instance.put_state(room_id, target, state_type, content)
 
 
@@ -504,6 +535,10 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
 
 
 def upload_exported_apps(*args, **kwargs) -> None:
+    """
+    Uploads all the apps in the export directory to the primary target for
+    the current database.
+    """
     try:
         apps = os.listdir(FRACTAL_EXPORT_DIR)
     except FileNotFoundError:
@@ -513,8 +548,9 @@ def upload_exported_apps(*args, **kwargs) -> None:
     from fractal_database.models import Database, RepresentationLog
     from fractal_database_matrix.models import MatrixReplicationTarget
 
-    database = Database.current_db()
-    if not database:
+    try:
+        database = Database.current_db()
+    except Database.DoesNotExist:
         logger.warning("No current database found, skipping app upload")
         return None
 
