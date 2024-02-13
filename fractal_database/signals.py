@@ -11,12 +11,11 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
-from django.db.models.signals import post_save
 from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name, init_poetry_project
 from taskiq_matrix.lock import MatrixLock
 
-logger = logging.getLogger("django")
+logger = logging.getLogger(__name__)
 
 _thread_locals = threading.local()
 
@@ -279,6 +278,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         is_root=True,
         defaults={
             "name": project_name,
+            "is_root": True,
         },
     )
 
@@ -440,7 +440,7 @@ async def _lock_and_put_state(
     else:
         raise Exception("No creds found not locking and putting state")
 
-    async with MatrixLock(homeserver_url, access_token, room_id).lock(key=state_type) as lock_id:
+    async with MatrixLock(homeserver_url, access_token, room_id).lock(key=state_type) as lock_id:  # type: ignore
         await repr_instance.put_state(room_id, target, state_type, content)
 
 
@@ -535,6 +535,10 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
 
 
 def upload_exported_apps(*args, **kwargs) -> None:
+    """
+    Uploads all the apps in the export directory to the primary target for
+    the current database.
+    """
     try:
         apps = os.listdir(FRACTAL_EXPORT_DIR)
     except FileNotFoundError:
@@ -544,8 +548,9 @@ def upload_exported_apps(*args, **kwargs) -> None:
     from fractal_database.models import Database, RepresentationLog
     from fractal_database_matrix.models import MatrixReplicationTarget
 
-    database = Database.current_db()
-    if not database:
+    try:
+        database = Database.current_db()
+    except Database.DoesNotExist:
         logger.warning("No current database found, skipping app upload")
         return None
 

@@ -1,9 +1,12 @@
+import logging
 import os
 
 from django.apps import AppConfig
 from django.conf import settings
 from django.db import models
 from django.db.models.fields.related import ManyToManyField, ManyToManyRel
+
+logger = logging.getLogger(__name__)
 
 
 class FractalDatabaseConfig(AppConfig):
@@ -34,6 +37,10 @@ class FractalDatabaseConfig(AppConfig):
             # create the matrix replication target for the project database
             models.signals.post_migrate.connect(
                 create_database_and_matrix_replication_target, sender=self
+            )
+        else:
+            logger.warning(
+                "MATRIX_ROOM_ID is set, not creating database and matrix replication target."
             )
 
         models.signals.post_migrate.connect(upload_exported_apps, sender=self)

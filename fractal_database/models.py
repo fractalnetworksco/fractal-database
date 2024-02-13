@@ -1,5 +1,4 @@
 import logging
-import traceback
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from uuid import uuid4
@@ -141,7 +140,7 @@ class ReplicatedModel(BaseModel):
         if not database:
             try:
                 database = Database.current_db()
-            except DatabaseConfig.DoesNotExist as e:
+            except Database.DoesNotExist as e:
                 logger.error("Unable to get current database from schedule_replication")
                 return
 
@@ -508,12 +507,15 @@ class Database(ReplicatedModel):
         """
         Returns the current database.
         """
-        return (
-            DatabaseConfig.objects.select_related("current_db")
-            .prefetch_related("current_db__matrixreplicationtarget_set")
-            .get()
-            .current_db
-        )
+        try:
+            return (
+                DatabaseConfig.objects.select_related("current_db")
+                .prefetch_related("current_db__matrixreplicationtarget_set")
+                .get()
+                .current_db
+            )
+        except DatabaseConfig.DoesNotExist:
+            raise Database.DoesNotExist()
 
     @classmethod
     async def acurrent_db(cls) -> "Database":
@@ -527,12 +529,15 @@ class Database(ReplicatedModel):
         """
         Returns the current device.
         """
-        return (
-            DatabaseConfig.objects.select_related("current_device")
-            .prefetch_related("current_device__matrixcredentials_set")
-            .get()
-            .current_device
-        )
+        try:
+            return (
+                DatabaseConfig.objects.select_related("current_device")
+                .prefetch_related("current_device__matrixcredentials_set")
+                .get()
+                .current_device
+            )  # type: ignore
+        except DatabaseConfig.DoesNotExist:
+            raise Device.DoesNotExist()
 
     @classmethod
     async def acurrent_device(cls) -> "Device":
@@ -585,7 +590,7 @@ class App(ReplicatedModel):
 
 class Device(ReplicatedModel):
     # type hint for MatrixCredentials reverse relation
-    matrixcredentials_set: "MatrixCredentials"
+    matrixcredentials_set: BaseManager["MatrixCredentials"]
 
     name = models.CharField(max_length=255, unique=True)
     display_name = models.CharField(max_length=255, null=True, blank=True)
