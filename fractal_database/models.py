@@ -140,7 +140,7 @@ class ReplicatedModel(BaseModel):
         if not database:
             try:
                 database = Database.current_db()
-            except DatabaseConfig.DoesNotExist as e:
+            except Database.DoesNotExist as e:
                 logger.error("Unable to get current database from schedule_replication")
                 return
 
@@ -284,6 +284,9 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
+    def get_content_type(self) -> ContentType:
+        return ContentType.objects.get_for_model(self.__class__)
+
     def get_creds(self) -> Any:
         return None
 
@@ -338,9 +341,11 @@ class ReplicationTarget(ReplicatedModel):
             fixture = []
             logger.debug("Querying for representation logs...")
             async for log in queryset:
-                async for repr_log in log.repr_logs.select_related(
-                    "content_type", "target_type"
-                ).filter(deleted=False).order_by("date_created"):
+                async for repr_log in (
+                    log.repr_logs.select_related("content_type", "target_type")
+                    .filter(deleted=False)
+                    .order_by("date_created")
+                ):
                     try:
                         print("Calling apply for repr log: ", repr_log)
                         await repr_log.apply()
@@ -393,13 +398,18 @@ class ReplicationTarget(ReplicatedModel):
 
     async def get_repl_logs_by_txn(self) -> List[BaseManager[ReplicationLog]]:
         txn_ids = (
-            ReplicationLog.objects.filter(target_id=self.pk, deleted=False)
+            ReplicationLog.objects.filter(
+                target_id=self.pk, target_type=self.get_content_type(), deleted=False
+            )
             .values_list("txn_id", flat=True)
             .distinct()
         )
         return [
             ReplicationLog.objects.filter(
-                txn_id=txn_id, deleted=False, target_id=self.pk
+                txn_id=txn_id,
+                deleted=False,
+                target_id=self.pk,
+                target_type=self.get_content_type(),
             ).order_by("date_created")
             async for txn_id in txn_ids
         ]
@@ -497,12 +507,15 @@ class Database(ReplicatedModel):
         """
         Returns the current database.
         """
-        return (
-            DatabaseConfig.objects.select_related("current_db")
-            .prefetch_related("current_db__matrixreplicationtarget_set")
-            .get()
-            .current_db
-        )
+        try:
+            return (
+                DatabaseConfig.objects.select_related("current_db")
+                .prefetch_related("current_db__matrixreplicationtarget_set")
+                .get()
+                .current_db
+            )
+        except DatabaseConfig.DoesNotExist:
+            raise Database.DoesNotExist()
 
     @classmethod
     async def acurrent_db(cls) -> "Database":
@@ -516,12 +529,15 @@ class Database(ReplicatedModel):
         """
         Returns the current device.
         """
-        return (
-            DatabaseConfig.objects.select_related("current_device")
-            .prefetch_related("current_device__matrixcredentials_set")
-            .get()
-            .current_device
-        )
+        try:
+            return (
+                DatabaseConfig.objects.select_related("current_device")
+                .prefetch_related("current_device__matrixcredentials_set")
+                .get()
+                .current_device
+            )  # type: ignore
+        except DatabaseConfig.DoesNotExist:
+            raise Device.DoesNotExist()
 
     @classmethod
     async def acurrent_device(cls) -> "Device":
@@ -574,14 +590,15 @@ class App(ReplicatedModel):
 
 class Device(ReplicatedModel):
     # type hint for MatrixCredentials reverse relation
-    matrixcredentials_set: "MatrixCredentials"
+    matrixcredentials_set: BaseManager["MatrixCredentials"]
 
     name = models.CharField(max_length=255, unique=True)
     display_name = models.CharField(max_length=255, null=True, blank=True)
     owner_matrix_id = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self) -> str:
-        return str([cred.matrix_id for cred in self.matrixcredentials_set.all()])
+        return self.name
+        # return str([cred.matrix_id for cred in self.matrixcredentials_set.all()])
 
 
 # class DeviceDatabaseConfig(ReplicatedModel):
