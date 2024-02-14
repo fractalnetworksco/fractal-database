@@ -2,12 +2,12 @@ import random
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fractal_database.models import DummyReplicationTarget, Device
+from fractal_database.models import Device, DummyReplicationTarget
 from fractal_database.signals import (
     clear_deferred_replications,
     commit,
+    defer_replication,
     enter_signal_handler,
-    defer_replication
 )
 
 FILE_PATH = "fractal_database.signals"
@@ -49,15 +49,17 @@ def test_signals_commit_replication_error():
     """ """
 
     mock_target = MagicMock(spec=DummyReplicationTarget)
+    mock_target.name = "test_name"
     mock_target.replicate = AsyncMock()
 
     mock_target.replicate.side_effect = Exception()
 
-
     with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
-        commit(mock_target)
+        with patch(f"{FILE_PATH}.clear_deferred_replications", new=MagicMock()) as mock_clear:
+            commit(mock_target)
 
-        #! failing in the finally block, thread local has no attr named deferred replications
+    mock_clear.assert_called_with(mock_target.name)
+    mock_logger.error.assert_called()
 
 
 # @pytest.mark.skip(reason="same attribute error as above")
@@ -65,16 +67,18 @@ def test_signals_commit_no_error():
     """ """
 
     repl_target = DummyReplicationTarget()
-    # mock_target = MagicMock(spec=ReplicationTarget)
-    # mock_target.replicate = AsyncMock()
+    repl_target.name = "test_name"
 
     with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
-        commit(repl_target)
+        with patch(f"{FILE_PATH}.clear_deferred_replications", new=MagicMock()) as mock_clear:
+            commit(repl_target)
+
+    mock_clear.assert_called_with(repl_target.name)
+    mock_logger.error.assert_not_called()
+
 
 @pytest.mark.django_db()
 def test_signals_register_device_account_not_created_or_raw(test_device):
-    """
-    """
-    print('name===========', test_device.name)
-
-
+    """ """
+    # ? somewhere there is a logger call that was chanced to a print and accidentally commited
+    print("name===========", test_device.name)

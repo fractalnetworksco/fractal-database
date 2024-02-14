@@ -3,9 +3,9 @@ import os
 import secrets
 from typing import Generator
 from uuid import uuid4
-from fractal_database.models import Device, Database
 
 import pytest
+from fractal_database.models import Database, Device
 from nio import AsyncClient
 
 # from homeserver.core.models import MatrixAccount
@@ -19,29 +19,24 @@ except KeyError as e:
         f"Please run prepare-test.py first, then source the generated environment file: {e}"
     )
 
-@pytest.fixture(scope='function')
+
+@pytest.fixture(scope="function")
 def test_database(db):
-    """
-    """
+    """ """
 
     from fractal_database.signals import create_database_and_matrix_replication_target
+
     create_database_and_matrix_replication_target()
 
     return Database.current_db()
 
 
-
-
-
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def test_device(db, test_database):
-    """
-    """
+    """ """
     unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
 
     return Device.objects.create(name=unique_id)
-
-
 
 
 # @pytest.fixture(scope="function")
