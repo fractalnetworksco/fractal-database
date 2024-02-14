@@ -1,10 +1,11 @@
 import asyncio
 import os
+import secrets
 from typing import Generator
 from uuid import uuid4
+from fractal_database.models import Device, Database
 
 import pytest
-# from fractal_database.models import Database
 from nio import AsyncClient
 
 # from homeserver.core.models import MatrixAccount
@@ -13,11 +14,34 @@ try:
     TEST_HOMESERVER_URL = os.environ["MATRIX_HOMESERVER_URL"]
     TEST_USER_USER_ID = os.environ["HS_USER_ID"]
     TEST_USER_ACCESS_TOKEN = os.environ["MATRIX_ACCESS_TOKEN"]
-    TEST_ROOM_ID = os.environ["MATRIX_ROOM_ID"]
 except KeyError as e:
     raise Exception(
         f"Please run prepare-test.py first, then source the generated environment file: {e}"
     )
+
+@pytest.fixture(scope='function')
+def test_database(db):
+    """
+    """
+
+    from fractal_database.signals import create_database_and_matrix_replication_target
+    create_database_and_matrix_replication_target()
+
+    return Database.current_db()
+
+
+
+
+
+@pytest.fixture(scope='function')
+def test_device(db, test_database):
+    """
+    """
+    unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
+
+    return Device.objects.create(name=unique_id)
+
+
 
 
 # @pytest.fixture(scope="function")

@@ -7,19 +7,10 @@ from fractal_database.signals import (
     clear_deferred_replications,
     commit,
     enter_signal_handler,
+    defer_replication
 )
 
 FILE_PATH = "fractal_database.signals"
-
-class TestDevice(Device):
-    """
-    """
-
-    def __init__(self, name, display_name, owner_matrix_id):
-        app_label = "test"
-        self.name = name
-        self.display_name = display_name
-        self.owner_matrix_id = owner_matrix_id
 
 
 def test_signals_enter_signal_handler_no_nesting_count():
@@ -53,7 +44,7 @@ def test_signals_enter_signal_handler_existing_nesting_count():
     assert mock_thread.signal_nesting_count is not 1
 
 
-@pytest.mark.skip(reason="attribute error")
+# @pytest.mark.skip(reason="attribute error")
 def test_signals_commit_replication_error():
     """ """
 
@@ -62,13 +53,14 @@ def test_signals_commit_replication_error():
 
     mock_target.replicate.side_effect = Exception()
 
+
     with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
         commit(mock_target)
 
         #! failing in the finally block, thread local has no attr named deferred replications
 
 
-@pytest.mark.skip(reason="same attribute error as above")
+# @pytest.mark.skip(reason="same attribute error as above")
 def test_signals_commit_no_error():
     """ """
 
@@ -79,16 +71,10 @@ def test_signals_commit_no_error():
     with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
         commit(repl_target)
 
-def test_signals_register_device_account_not_created_or_raw():
+@pytest.mark.django_db()
+def test_signals_register_device_account_not_created_or_raw(test_device):
     """
     """
-
-    name = "test_name"    
-    display_name = "test_display_name"
-    owner_matrix_id = "test_matrix_id"
-
-    test_device = TestDevice(name, display_name, owner_matrix_id)
-
-    print('here')
+    print('name===========', test_device.name)
 
 

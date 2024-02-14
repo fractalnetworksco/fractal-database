@@ -12,7 +12,10 @@ from sys import exit
 import docker
 from aiofiles import open
 from docker.models.containers import Container
-from nio import AsyncClient, LoginError, RoomCreateError
+from nio import LoginError, RoomCreateError
+from fractal.cli.controllers.auth import AuthController
+from asgiref.sync import sync_to_async
+from fractal.matrix.async_client import FractalAsyncClient
 
 ENV = os.environ.get("ENV", "dev")
 TEST_CONFIG_DIR = os.environ.get("TEST_CONFIG_DIR", ".")
@@ -21,15 +24,15 @@ TEST_HOMESERVER_URL = os.environ.get("TEST_HOMESERVER_URL", "http://localhost:80
 TEST_USER_USERNAME = os.environ.get("TEST_USER_USERNAME", "admin")
 TEST_USER_PASSWORD = os.environ.get("TEST_USER_PASSWORD", "admin")
 PYTHON_BIN = os.environ.get("PYTHON_BIN", "venv/bin/python")
+SYNAPSE_DOCKER_LABEL = os.environ.get("SYNAPSE_DOCKER_LABEL", "org.homeserver=true")
 
 
 async def main():
-    # this is blocking but doesn't matter since this is an entrypoint
     try:
         # get homeserver container
         docker_client = docker.from_env()
         synapse_container = docker_client.containers.list(
-            filters={"label": "org.homeserver=true"}
+            filters={"label": SYNAPSE_DOCKER_LABEL}
         )[0]
         # asserting here so that the Container type hint works : )
         assert isinstance(synapse_container, Container)
@@ -48,7 +51,11 @@ async def main():
         exit(1)
 
     # login
-    matrix_client = AsyncClient(TEST_HOMESERVER_URL, TEST_USER_USERNAME)
+    matrix_client = FractalAsyncClient(
+        TEST_HOMESERVER_URL, access_token="", user=TEST_USER_USERNAME
+    )
+
+    print(f"Logging in to homeserver: {TEST_HOMESERVER_URL} as {TEST_USER_USERNAME}")
     login_res = await matrix_client.login(TEST_USER_PASSWORD)
     if isinstance(login_res, LoginError):
         print(f"Error logging in: {login_res.message}")
@@ -56,20 +63,10 @@ async def main():
 
     # disable rate limiting for the created test user
     print(f"Disabling rate limiting for user: {matrix_client.user_id}")
-    result = synapse_container.exec_run(
-        f"sqlite3 /data/homeserver.db -cmd \"INSERT INTO ratelimit_override values ('{matrix_client.user_id}', 0, 0);\" .exit"
-    )
-    if "UNIQUE constraint failed" not in result.output.decode("utf-8") and result.exit_code != 0:
-        print(result.output.decode("utf-8"))
-        exit(1)
+    await matrix_client.disable_ratelimiting(matrix_client.user_id)
 
-    # restart synapse container
-    print("Restarting synapse container")
-    synapse_container.restart()
-
-    print("Creating room")
-    # create room
     # This always creates a new room. This is okay since we want a fresh start
+    print("Creating room")
     room_create_res = await matrix_client.room_create(name="Test Room")
     if isinstance(room_create_res, RoomCreateError):
         print(f"Error creating room: {room_create_res.message}")
@@ -85,6 +82,15 @@ async def main():
 
     print("Successfully prepared")
 
+
+
+    auth_controller = AuthController()
+
+    await sync_to_async(auth_controller.login)(
+        matrix_id=matrix_client.user_id,
+        homeserver_url=TEST_HOMESERVER_URL,
+        access_token=matrix_client.access_token
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
