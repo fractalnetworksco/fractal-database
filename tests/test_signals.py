@@ -80,5 +80,4 @@ def test_signals_commit_no_error():
 @pytest.mark.django_db()
 def test_signals_register_device_account_not_created_or_raw(test_device):
     """ """
-    # ? somewhere there is a logger call that was chanced to a print and accidentally commited
     print("name===========", test_device.name)

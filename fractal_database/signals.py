@@ -306,7 +306,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
             or not os.environ.get("MATRIX_ACCESS_TOKEN")
             or not os.environ.get("MATRIX_OWNER_MATRIX_ID")
         ):
-            print(
+            logger.info(
                 "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixReplicationTarget creation"
             )
             return
