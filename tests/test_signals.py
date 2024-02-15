@@ -1,4 +1,5 @@
 import random
+import secrets
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -44,7 +45,6 @@ def test_signals_enter_signal_handler_existing_nesting_count():
     assert mock_thread.signal_nesting_count is not 1
 
 
-# @pytest.mark.skip(reason="attribute error")
 def test_signals_commit_replication_error():
     """ """
 
@@ -62,7 +62,6 @@ def test_signals_commit_replication_error():
     mock_logger.error.assert_called()
 
 
-# @pytest.mark.skip(reason="same attribute error as above")
 def test_signals_commit_no_error():
     """ """
 
@@ -75,6 +74,89 @@ def test_signals_commit_no_error():
 
     mock_clear.assert_called_with(repl_target.name)
     mock_logger.error.assert_not_called()
+
+
+def test_signals_defer_replication_not_in_transaction():
+    """ """
+
+    mock_target = MagicMock(spec=DummyReplicationTarget)
+    mock_target.name = "test_name"
+
+    with patch(f"{FILE_PATH}.transaction", new=MagicMock()) as mock_transaction:
+        mock_transaction.get_connection = MagicMock()
+        mock_transaction.get_connection.return_value = MagicMock()
+        mock_transaction.get_connection.return_value.in_atomic_block = False
+        with pytest.raises(Exception):
+            defer_replication(mock_target)
+
+
+def test_signals_defer_replication_no_defered_replications():
+    """ """
+
+    mock_target = MagicMock(spec=DummyReplicationTarget)
+    mock_target.name = "test_name"
+
+    with patch(f"{FILE_PATH}.transaction", new=MagicMock()) as mock_transaction:
+        mock_transaction.get_connection = MagicMock()
+        mock_transaction.get_connection.return_value = MagicMock()
+        mock_transaction.get_connection.return_value.in_atomic_block = True
+
+        with patch(f"{FILE_PATH}._thread_locals") as mock_thread_locals:
+            with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
+                delattr(mock_thread_locals, "defered_replications")
+                defer_replication(mock_target)
+
+    mock_logger.info.assert_called_with(f"Registering on_commit for {mock_target.name}")
+    mock_transaction.on_commit.assert_called_once()
+    assert "test_name" in mock_thread_locals.defered_replications
+    assert mock_thread_locals.defered_replications["test_name"][0] == mock_target
+
+
+def test_signals_defer_replication_target_in_defered_replications():
+    """ """
+
+    mock_target = MagicMock(spec=DummyReplicationTarget)
+    mock_target.name = secrets.token_hex(8)
+
+    with patch(f"{FILE_PATH}.transaction", new=MagicMock()) as mock_transaction:
+        mock_transaction.get_connection = MagicMock()
+        mock_transaction.get_connection.return_value = MagicMock()
+        mock_transaction.get_connection.return_value.in_atomic_block = True
+
+        with patch(f"{FILE_PATH}._thread_locals") as mock_thread_locals:
+            with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
+                mock_thread_locals.defered_replications = {mock_target.name: [mock_target]}
+                defer_replication(mock_target)
+
+    mock_logger.info.assert_called_once()
+    mock_transaction.on_commit.assert_not_called()
+    assert mock_target.name in mock_thread_locals.defered_replications
+    assert mock_thread_locals.defered_replications[mock_target.name][0] == mock_target
+
+
+def test_signals_clear_defered_replications_functional_test():
+    """ """
+
+    mock_target = MagicMock(spec=DummyReplicationTarget)
+    mock_target.name = secrets.token_hex(8)
+
+    with patch(f"{FILE_PATH}.transaction", new=MagicMock()) as mock_transaction:
+        mock_transaction.get_connection = MagicMock()
+        mock_transaction.get_connection.return_value = MagicMock()
+        mock_transaction.get_connection.return_value.in_atomic_block = True
+
+        with patch(f"{FILE_PATH}._thread_locals") as mock_thread_locals:
+            delattr(mock_thread_locals, "defered_replications")
+            defer_replication(mock_target)
+
+            assert mock_target.name in mock_thread_locals.defered_replications
+            assert mock_thread_locals.defered_replications[mock_target.name][0] == mock_target
+
+            clear_deferred_replications(mock_target.name)
+
+            assert mock_target.name not in mock_thread_locals.defered_replications
+
+
 
 
 @pytest.mark.django_db()
