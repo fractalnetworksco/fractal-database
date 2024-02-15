@@ -389,12 +389,12 @@ def join_device_to_database(
     When a new device is added to a database, this signal sends an invite
     to the added device and automatically accepts it.
     """
-    from fractal_database.models import Database, Device
+    from fractal_database.models import Device
 
     if kwargs["action"] != "post_add":
         return None
 
-    current_device = Database.current_device()
+    current_device = Device.current_device()
 
     for device_id in pk_set:
         # dont send an invite if the device is the current device

@@ -524,28 +524,6 @@ class Database(ReplicatedModel):
         """
         return await sync_to_async(cls.current_db)()
 
-    @classmethod
-    def current_device(cls) -> "Device":
-        """
-        Returns the current device.
-        """
-        try:
-            return (
-                DatabaseConfig.objects.select_related("current_device")
-                .prefetch_related("current_device__matrixcredentials_set")
-                .get()
-                .current_device
-            )  # type: ignore
-        except DatabaseConfig.DoesNotExist:
-            raise Device.DoesNotExist()
-
-    @classmethod
-    async def acurrent_device(cls) -> "Device":
-        """
-        Returns the current device.
-        """
-        return await sync_to_async(cls.current_device)()
-
 
 class AppCatalog(ReplicatedModel):
     """
@@ -599,6 +577,28 @@ class Device(ReplicatedModel):
     def __str__(self) -> str:
         return self.name
         # return str([cred.matrix_id for cred in self.matrixcredentials_set.all()])
+
+    @classmethod
+    def current_device(cls) -> "Device":
+        """
+        Returns the current device.
+        """
+        try:
+            return (
+                DatabaseConfig.objects.select_related("current_device")
+                .prefetch_related("current_device__matrixcredentials_set")
+                .get()
+                .current_device
+            )  # type: ignore
+        except DatabaseConfig.DoesNotExist:
+            raise Device.DoesNotExist()
+
+    @classmethod
+    async def acurrent_device(cls) -> "Device":
+        """
+        Returns the current device.
+        """
+        return await sync_to_async(cls.current_device)()
 
 
 # class DeviceDatabaseConfig(ReplicatedModel):
