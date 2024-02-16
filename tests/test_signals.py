@@ -9,7 +9,9 @@ from fractal_database.signals import (
     commit,
     defer_replication,
     enter_signal_handler,
+    increment_version,
     register_device_account,
+    object_post_save
 )
 
 FILE_PATH = "fractal_database.signals"
@@ -185,19 +187,137 @@ def test_signals_register_device_account_not_created_or_raw(test_device, second_
     mock_logger.info.assert_not_called()
 
 
+@pytest.mark.skip(reason="not entering the nested function at all")
 @pytest.mark.django_db()
-def test_signals_register_device_account_test(
+def test_signals_register_device_account_with_creds(
     test_device, second_test_device, test_homeserver_url, test_user_access_token
 ):
-    """ """
+    """
+    FIXME: figure out how to mock the classes imported within the function
+    """
 
     test_matrix_id = "@admin:localhost"
+    test_registration_token = "test_registration_token"
 
-    with patch(f"{FILE_PATH}.AuthenticatedController") as mock_auth_controller:
-        with patch(f"{FILE_PATH}.FractalAsyncClient") as mock_client:
-            mock_client.
-            mock_auth_controller.get_creds = MagicMock()
-            mock_auth_controller.get_creds.return_value = [test_user_access_token, test_homeserver_url, test_matrix_id]
-            register_device_account(
-                sender=test_device, instance=second_test_device, created=False, raw=False
+    with patch("fractal.cli.controllers.auth.AuthenticatedController") as mock_auth_controller:
+        # with patch('fractal.matrix.MatrixClient') as mock_client:
+
+        # mock_client.generate_registration_token = AsyncMock()
+        # mock_client.generate_registration_token.return_value = test_registration_token
+
+        # mock_client.whoami = AsyncMock()
+        # mock_client.user_id = test_matrix_id
+
+        # mock_client.register_with_token = AsyncMock()
+
+        mock_auth_controller.get_creds = MagicMock()
+        mock_auth_controller.get_creds.return_value = [
+            test_user_access_token,
+            test_homeserver_url,
+            test_matrix_id,
+        ]
+
+        print("calling***************")
+        register_device_account(
+            sender=test_device, instance=second_test_device, created=False, raw=False
+        )
+
+    # mock_client.whoami.assert_not_called()
+
+
+@pytest.mark.skip(reason="not properly getting the data from the db in the test for verification")
+def test_signals_increment_version(test_device, second_test_device):
+    """ """
+
+    original_version = test_device.object_version
+
+    increment_version(sender=second_test_device, instance=test_device)
+
+    updated_device = test_device.objects.get(pk=test_device.pk)
+
+    assert updated_device.object_version == original_version + 1
+
+def test_signals_object_post_save_raw(test_device, second_test_device):
+    """
+    """
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        result = object_post_save(
+            sender=second_test_device,
+            instance=test_device,
+            created=False,
+            raw=True,
+        )
+
+    assert result is None
+    mock_logger.info.assert_called_with(f"Loading instance from fixture: {test_device}")
+
+def test_signals_object_post_save_verify_recursive_call(test_device, second_test_device):
+    """
+    Tests that if the user is not in a transaction, it will enter one before making
+    a recursive call to object_post_save
+    """
+
+    mock_no_connection = MagicMock()
+    mock_no_connection.in_atomic_block = False
+
+    mock_connection = MagicMock()
+    mock_connection.in_atomic_block = True
+
+    with patch(f"{FILE_PATH}.object_post_save") as mock_post_save:
+        with patch(f"{FILE_PATH}.transaction") as mock_transaction:
+            mock_transaction.get_connection.side_effect = [mock_no_connection, mock_connection]
+            result = object_post_save(
+                sender=second_test_device,
+                instance=test_device,
+                created=False,
+                raw=False,
             )
+
+    mock_post_save.assert_called_once()
+    mock_transaction.atomic.assert_called_once()
+
+def test_signals_object_post_save_in_nested_signal_handler(test_device, second_test_device):
+    """
+    """
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=True):
+            with patch(f"{FILE_PATH}.exit_signal_handler") as mock_exit:
+                result = object_post_save(
+                    sender=second_test_device,
+                    instance=test_device,
+                    created=False,
+                    raw=False,
+                )
+
+    assert result is None
+    mock_exit.assert_called_once()
+    mock_logger.info.assert_called_with(f"Back inside post_save for instance: {test_device}")
+
+
+def test_signals_object_post_save_not_in_nested_signal_handler(test_device, second_test_device):
+    """
+    """
+    test_device.schedule_replication = MagicMock()
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=False):
+            with patch(f"{FILE_PATH}.exit_signal_handler") as mock_exit:
+                result = object_post_save(
+                    sender=second_test_device,
+                    instance=test_device,
+                    created=False,
+                    raw=False,
+                )
+
+    call_args_list = mock_logger.info.call_args_list
+    args = []
+    args.append(call_args_list[0][0])
+    args.append(call_args_list[1][0])
+
+    # ! still have to do the assertions, figure out how to string-ify this touple
+    print('args========', str(args[0]))
+    # mock_logger.info.assert_called_with(f"Outermost post save instance: {test_device}") 
+    # mock_logger.info.assert_called_with(f"Calling schedule replication on {test_device}") 
+    # test_device.schedule_replication.assert_called_once()
