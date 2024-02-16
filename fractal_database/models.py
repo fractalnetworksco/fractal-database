@@ -117,6 +117,10 @@ class ReplicatedModel(BaseModel):
         ReplicatedModel.models.append(cls)
 
     @classmethod
+    def get_subclasses(cls, **kwargs):
+        return cls.__subclasses__()
+
+    @classmethod
     def connect_signals(cls, **kwargs):
         from fractal_database.signals import object_post_save, update_target_state
 
@@ -136,7 +140,7 @@ class ReplicatedModel(BaseModel):
             with transaction.atomic():
                 return self.schedule_replication(created=created)
 
-        print("Inside ReplicatedModel.schedule_replication()")
+        print(f"Inside ReplicatedModel.schedule_replication() for {self}")
         if not database:
             try:
                 database = Database.current_db()
@@ -147,6 +151,8 @@ class ReplicatedModel(BaseModel):
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         targets.extend(self.replication_targets())
+        if isinstance(self, ReplicationTarget) and self not in targets:
+            targets.append(self)
 
         repr_logs = None
         for target in targets:
@@ -371,9 +377,9 @@ class ReplicationTarget(ReplicatedModel):
 
     async def store_metadata(self, metadata: dict) -> None:
         """
-        Store the Matrix room_id on target
+        Store the metadata on target.
         """
-        self.metadata["room_id"] = metadata["room_id"]
+        self.metadata.update(metadata)
         await self.asave()
 
     def create_representation_logs(self, instance: "ReplicatedModel"):
@@ -561,6 +567,7 @@ class App(ReplicatedModel):
     created when doing `fractal install`
     """
 
+    name = models.CharField(max_length=255)
     app_instance_id = models.CharField(max_length=255, unique=True)
     metadata = models.ForeignKey(AppCatalog, on_delete=models.DO_NOTHING)
     devices = models.ManyToManyField("fractal_database.Device")

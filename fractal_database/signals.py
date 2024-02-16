@@ -15,7 +15,8 @@ from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name, init_poetry_project
 from taskiq_matrix.lock import MatrixLock
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("django")
+# logger = logging.getLogger(__name__)
 
 _thread_locals = threading.local()
 
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 
 try:
     FRACTAL_EXPORT_DIR = settings.FRACTAL_EXPORT_DIR
-except:
+except AttributeError:
     FRACTAL_EXPORT_DIR = settings.BASE_DIR / "export"
 
 
@@ -164,13 +165,15 @@ def register_device_account(
 
     access_token, matrix_id, password = async_to_sync(_register_device_account)()
 
-    MatrixCredentials.objects.create(
+    target = Database.current_db().primary_target()
+
+    creds = MatrixCredentials.objects.create(
         matrix_id=matrix_id,
         password=password,
         access_token=access_token,
-        target=Database.current_db().primary_target(),
         device=instance,
     )
+    creds.targets.add(target)
 
 
 def increment_version(sender, instance, **kwargs) -> None:
@@ -245,8 +248,8 @@ def schedule_replication_on_m2m_change(
             related_instance.schedule_replication(created=False)
         else:
             related_instance = instance
-            related_instance.save()
-            # related_instance.schedule_replication(created=False)
+            # related_instance.save()
+            related_instance.schedule_replication(created=False)
 
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
@@ -261,10 +264,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         Device,
         DummyReplicationTarget,
     )
-    from fractal_database_matrix.models import (
-        MatrixCredentials,
-        MatrixReplicationTarget,
-    )
+    from fractal_database_matrix.models import MatrixReplicationTarget
 
     if not transaction.get_connection().in_atomic_block:
         with transaction.atomic():
@@ -299,7 +299,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
 
     creds = AuthenticatedController.get_creds()
     if creds:
-        access_token, homeserver_url, owner_matrix_id = creds
+        _, homeserver_url, owner_matrix_id = creds
     else:
         if (
             not os.environ.get("MATRIX_HOMESERVER_URL")
@@ -314,7 +314,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
         owner_matrix_id = os.environ["MATRIX_OWNER_MATRIX_ID"]
         # TODO move access_token to a non-replicated model
-        access_token = os.environ["MATRIX_ACCESS_TOKEN"]
+        _ = os.environ["MATRIX_ACCESS_TOKEN"]
 
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
     target, created = MatrixReplicationTarget.objects.get_or_create(
@@ -345,7 +345,6 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     # replicate the database now that we have a replication target
     print(f"Replicating after adding device to database")
     database.save()
-    # database.schedule_replication()
 
 
 async def _accept_invite(
@@ -400,6 +399,7 @@ def join_device_to_database(
         # dont send an invite if the device is the current device
         # since the current device is invited in create_representation
         if device_id == current_device.pk:
+            print("Not sending invite to current device in database...")
             continue
 
         device = Device.objects.get(pk=device_id)
@@ -414,12 +414,23 @@ def join_device_to_database(
             primary_target.metadata["room_id"],  # type: ignore
             primary_target.homeserver,  # type: ignore
         )
+        async_to_sync(_invite_device)(
+            device_creds,
+            primary_target.metadata["devices_room_id"],  # type: ignore
+            primary_target.homeserver,  # type: ignore
+        )
+
+        # accept invite on behalf of device
         async_to_sync(_accept_invite)(
             device_creds,
             primary_target.metadata["room_id"],  # type: ignore
             primary_target.homeserver,  # type: ignore
         )
-        # accept invite on behalf of device
+        async_to_sync(_accept_invite)(
+            device_creds,
+            primary_target.metadata["devices_room_id"],  # type: ignore
+            primary_target.homeserver,  # type: ignore
+        )
 
 
 async def _lock_and_put_state(
@@ -458,11 +469,12 @@ def update_target_state(
     if not isinstance(instance, (Database, MatrixReplicationTarget)) or raw or created:
         return None
 
-    logger.info("Updating target state for %s" % instance)
     # only update the state if the object is the primary target
     if isinstance(instance, MatrixReplicationTarget) and not instance.primary:
         return None
-    elif isinstance(instance, Database):
+    logger.info("Updating target state for %s" % instance)
+
+    if isinstance(instance, Database):
         target = instance.primary_target()
         if not target or not isinstance(target, MatrixReplicationTarget):
             logger.warning(
@@ -479,7 +491,7 @@ def update_target_state(
 
     instance_fixture = instance.to_fixture(json=True)
     representation_module = target.get_representation_module()
-    print(f"Got representation module: {representation_module}")
+    logger.info(f"Got representation module: {representation_module}")
     repr_instance = RepresentationLog._get_repr_instance(representation_module)
     state_type = "f.database" if isinstance(instance, Database) else "f.database.target"
     # put state needs the matrix credentials for the target so accessing the creds here
@@ -593,3 +605,16 @@ def upload_exported_apps(*args, **kwargs) -> None:
 
         # remove the app after uploading (maybe we keep this?)
         # os.remove(f"{FRACTAL_EXPORT_DIR}/{app_name}")
+
+
+def initialize_fractal_app_catalog(*args, **kwargs):
+    from fractal_database.models import AppCatalog
+
+    logger.info("Initializing fractal app catalog")
+    AppCatalog.objects.get_or_create(
+        name="fractal",
+        defaults={
+            "name": "fractal",
+            "git_url": "https://github.com/fractalnetworksco/FIXME",
+        },
+    )
