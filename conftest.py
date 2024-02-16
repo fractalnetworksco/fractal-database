@@ -38,6 +38,20 @@ def test_device(db, test_database):
 
     return Device.objects.create(name=unique_id)
 
+@pytest.fixture(scope="function")
+def second_test_device(db, test_database):
+    """ """
+    unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
+
+    return Device.objects.create(name=unique_id)
+
+@pytest.fixture
+def test_user_access_token():
+    return os.environ['MATRIX_ACCESS_TOKEN']
+
+@pytest.fixture
+def test_homeserver_url() -> str:
+    return os.environ.get("TEST_HOMESERVER_URL", "http://localhost:8008")
 
 # @pytest.fixture(scope="function")
 # def matrix_client() -> Generator[AsyncClient, None, None]:

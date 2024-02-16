@@ -9,6 +9,7 @@ from fractal_database.signals import (
     commit,
     defer_replication,
     enter_signal_handler,
+    register_device_account,
 )
 
 FILE_PATH = "fractal_database.signals"
@@ -157,9 +158,46 @@ def test_signals_clear_defered_replications_functional_test():
             assert mock_target.name not in mock_thread_locals.defered_replications
 
 
+@pytest.mark.django_db()
+def test_signals_register_device_account_not_created_or_raw(test_device, second_test_device):
+    """
+    Tests that if created or raw are set to True, the function returns before any code
+    can be executed.
+    """
+
+    # patch the logger to verify that it was never called
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        # created and raw both True
+        register_device_account(
+            sender=test_device, instance=second_test_device, created=False, raw=False
+        )
+
+        # only raw is False
+        register_device_account(
+            sender=test_device, instance=second_test_device, created=True, raw=False
+        )
+
+        # only created is False
+        register_device_account(
+            sender=test_device, instance=second_test_device, created=False, raw=True
+        )
+
+    mock_logger.info.assert_not_called()
 
 
 @pytest.mark.django_db()
-def test_signals_register_device_account_not_created_or_raw(test_device):
+def test_signals_register_device_account_test(
+    test_device, second_test_device, test_homeserver_url, test_user_access_token
+):
     """ """
-    print("name===========", test_device.name)
+
+    test_matrix_id = "@admin:localhost"
+
+    with patch(f"{FILE_PATH}.AuthenticatedController") as mock_auth_controller:
+        with patch(f"{FILE_PATH}.FractalAsyncClient") as mock_client:
+            mock_client.
+            mock_auth_controller.get_creds = MagicMock()
+            mock_auth_controller.get_creds.return_value = [test_user_access_token, test_homeserver_url, test_matrix_id]
+            register_device_account(
+                sender=test_device, instance=second_test_device, created=False, raw=False
+            )
