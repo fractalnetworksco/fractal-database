@@ -10,8 +10,9 @@ from fractal_database.signals import (
     defer_replication,
     enter_signal_handler,
     increment_version,
+    object_post_save,
     register_device_account,
-    object_post_save
+    schedule_replication_on_m2m_change,
 )
 
 FILE_PATH = "fractal_database.signals"
@@ -226,6 +227,7 @@ def test_signals_register_device_account_with_creds(
 
 
 @pytest.mark.skip(reason="not properly getting the data from the db in the test for verification")
+@pytest.mark.django_db()
 def test_signals_increment_version(test_device, second_test_device):
     """ """
 
@@ -237,9 +239,10 @@ def test_signals_increment_version(test_device, second_test_device):
 
     assert updated_device.object_version == original_version + 1
 
+
+@pytest.mark.django_db()
 def test_signals_object_post_save_raw(test_device, second_test_device):
-    """
-    """
+    """ """
 
     with patch(f"{FILE_PATH}.logger") as mock_logger:
         result = object_post_save(
@@ -252,6 +255,8 @@ def test_signals_object_post_save_raw(test_device, second_test_device):
     assert result is None
     mock_logger.info.assert_called_with(f"Loading instance from fixture: {test_device}")
 
+
+@pytest.mark.django_db()
 def test_signals_object_post_save_verify_recursive_call(test_device, second_test_device):
     """
     Tests that if the user is not in a transaction, it will enter one before making
@@ -277,9 +282,10 @@ def test_signals_object_post_save_verify_recursive_call(test_device, second_test
     mock_post_save.assert_called_once()
     mock_transaction.atomic.assert_called_once()
 
+
+@pytest.mark.django_db()
 def test_signals_object_post_save_in_nested_signal_handler(test_device, second_test_device):
-    """
-    """
+    """ """
 
     with patch(f"{FILE_PATH}.logger") as mock_logger:
         with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=True):
@@ -296,9 +302,9 @@ def test_signals_object_post_save_in_nested_signal_handler(test_device, second_t
     mock_logger.info.assert_called_with(f"Back inside post_save for instance: {test_device}")
 
 
+@pytest.mark.django_db()
 def test_signals_object_post_save_not_in_nested_signal_handler(test_device, second_test_device):
-    """
-    """
+    """ """
     test_device.schedule_replication = MagicMock()
 
     with patch(f"{FILE_PATH}.logger") as mock_logger:
@@ -316,8 +322,127 @@ def test_signals_object_post_save_not_in_nested_signal_handler(test_device, seco
     args.append(call_args_list[0][0])
     args.append(call_args_list[1][0])
 
-    # ! still have to do the assertions, figure out how to string-ify this touple
-    print('args========', str(args[0]))
-    # mock_logger.info.assert_called_with(f"Outermost post save instance: {test_device}") 
-    # mock_logger.info.assert_called_with(f"Calling schedule replication on {test_device}") 
-    # test_device.schedule_replication.assert_called_once()
+    not_comparison_touple = (f"Back inside post_save for instance: {test_device}",)
+    comparison_touple = (f"Outermost post save instance: {test_device}",)
+    assert not_comparison_touple not in args
+    assert comparison_touple in args
+    test_device.schedule_replication.assert_called_once()
+
+
+@pytest.mark.django_db()
+async def test_signals_schedule_replication_on_m2m_change_invalid_action(
+    test_device, second_test_device
+):
+    """
+    #? action not in the given dictionary
+    """
+
+    sender = test_device
+    instance = second_test_device
+
+    with patch(f"{FILE_PATH}.print") as mock_print:
+        result = schedule_replication_on_m2m_change(
+            sender=sender,
+            instance=instance,
+            action="invalid_action_not_found_in_set",
+            reverse=True,
+            model=sender,
+            pk_set=[],
+        )
+
+    assert result is None
+    mock_print.assert_not_called()
+
+
+@pytest.mark.django_db()
+async def test_signals_schedule_replication_on_m2m_change_empty_pk_set(
+    test_device, second_test_device
+):
+    """
+    #? pass pk as empty list
+    """
+
+    sender = test_device
+    instance = second_test_device
+
+    sender.save = MagicMock()
+    sender.schedule_replication = MagicMock()
+
+    with patch(f"{FILE_PATH}.print") as mock_print:
+        result = schedule_replication_on_m2m_change(
+            sender=sender,
+            instance=instance,
+            action="post_add",
+            reverse=True,
+            model=sender,
+            pk_set=[],
+        )
+
+    # verify that you got passed the "action" check
+    mock_print.assert_called_once()
+
+    # verify that the for loop was a no-op
+    sender.save.assert_not_called()
+    sender.schedule_replication.assert_not_called()
+
+
+@pytest.mark.django_db()
+async def test_signals_schedule_replication_on_m2m_change_true_reverse(
+    test_device, second_test_device
+):
+    """
+    #? set reverse to True
+    """
+
+    sender = test_device
+    instance = second_test_device
+
+    sender.save = MagicMock()
+    sender.schedule_replication = MagicMock()
+    instance.schedule_replication = MagicMock()
+    ids = [f"{sender.id}"]
+    Device.objects.get = MagicMock(return_value=sender)
+
+    result = schedule_replication_on_m2m_change(
+        sender=sender,
+        instance=instance,
+        action="post_add",
+        reverse=True,
+        model=Device, #type: ignore
+        pk_set=ids,
+    )
+
+    sender.save.assert_not_called()
+    sender.schedule_replication.assert_called_once()
+    instance.schedule_replication.assert_called_once()
+
+
+@pytest.mark.django_db()
+async def test_signals_schedule_replication_on_m2m_change_false_reverse(
+    test_device, second_test_device
+):
+    """
+    #? set reverse to false
+    """
+
+    sender = test_device
+    instance = second_test_device
+
+    instance.save = MagicMock()
+    sender.schedule_replication = MagicMock()
+    instance.schedule_replication = MagicMock()
+    ids = [f"{sender.id}"]
+    Device.objects.get = MagicMock(return_value=sender)
+
+    result = schedule_replication_on_m2m_change(
+        sender=sender,
+        instance=instance,
+        action="post_add",
+        reverse=False,
+        model=Device, #type: ignore
+        pk_set=ids,
+    )
+
+    instance.save.assert_called_once()
+    instance.schedule_replication.assert_not_called()
+    sender.schedule_replication.assert_not_called()
