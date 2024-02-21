@@ -1,10 +1,12 @@
 import os
 import random
 import secrets
+from django.conf import settings
+from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fractal_database.models import Device, DummyReplicationTarget
+from fractal_database.models import Device, DummyReplicationTarget, Database
 from fractal_database.signals import (
     clear_deferred_replications,
     commit,
@@ -16,6 +18,9 @@ from fractal_database.signals import (
     register_device_account,
     schedule_replication_on_m2m_change,
 )
+from fractal_database_matrix.models import MatrixReplicationTarget
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 FILE_PATH = "fractal_database.signals"
 
@@ -163,7 +168,6 @@ def test_signals_clear_defered_replications_functional_test():
             assert mock_target.name not in mock_thread_locals.defered_replications
 
 
-@pytest.mark.django_db()
 def test_signals_register_device_account_not_created_or_raw(test_device, second_test_device):
     """
     Tests that if created or raw are set to True, the function returns before any code
@@ -191,7 +195,6 @@ def test_signals_register_device_account_not_created_or_raw(test_device, second_
 
 
 @pytest.mark.skip(reason="not entering the nested function at all")
-@pytest.mark.django_db()
 def test_signals_register_device_account_with_creds(
     test_device, second_test_device, test_homeserver_url, test_user_access_token
 ):
@@ -229,7 +232,6 @@ def test_signals_register_device_account_with_creds(
 
 
 @pytest.mark.skip(reason="not properly getting the data from the db in the test for verification")
-@pytest.mark.django_db()
 def test_signals_increment_version(test_device, second_test_device):
     """ """
 
@@ -242,7 +244,6 @@ def test_signals_increment_version(test_device, second_test_device):
     assert updated_device.object_version == original_version + 1
 
 
-@pytest.mark.django_db()
 def test_signals_object_post_save_raw(test_device, second_test_device):
     """ """
 
@@ -258,7 +259,6 @@ def test_signals_object_post_save_raw(test_device, second_test_device):
     mock_logger.info.assert_called_with(f"Loading instance from fixture: {test_device}")
 
 
-@pytest.mark.django_db()
 def test_signals_object_post_save_verify_recursive_call(test_device, second_test_device):
     """
     Tests that if the user is not in a transaction, it will enter one before making
@@ -285,7 +285,6 @@ def test_signals_object_post_save_verify_recursive_call(test_device, second_test
     mock_transaction.atomic.assert_called_once()
 
 
-@pytest.mark.django_db()
 def test_signals_object_post_save_in_nested_signal_handler(test_device, second_test_device):
     """ """
 
@@ -304,7 +303,6 @@ def test_signals_object_post_save_in_nested_signal_handler(test_device, second_t
     mock_logger.info.assert_called_with(f"Back inside post_save for instance: {test_device}")
 
 
-@pytest.mark.django_db()
 def test_signals_object_post_save_not_in_nested_signal_handler(test_device, second_test_device):
     """ """
     test_device.schedule_replication = MagicMock()
@@ -331,7 +329,6 @@ def test_signals_object_post_save_not_in_nested_signal_handler(test_device, seco
     test_device.schedule_replication.assert_called_once()
 
 
-@pytest.mark.django_db()
 async def test_signals_schedule_replication_on_m2m_change_invalid_action(
     test_device, second_test_device
 ):
@@ -356,7 +353,6 @@ async def test_signals_schedule_replication_on_m2m_change_invalid_action(
     mock_print.assert_not_called()
 
 
-@pytest.mark.django_db()
 async def test_signals_schedule_replication_on_m2m_change_empty_pk_set(
     test_device, second_test_device
 ):
@@ -388,7 +384,6 @@ async def test_signals_schedule_replication_on_m2m_change_empty_pk_set(
     sender.schedule_replication.assert_not_called()
 
 
-@pytest.mark.django_db()
 async def test_signals_schedule_replication_on_m2m_change_true_reverse(
     test_device, second_test_device
 ):
@@ -419,7 +414,6 @@ async def test_signals_schedule_replication_on_m2m_change_true_reverse(
     instance.schedule_replication.assert_called_once()
 
 
-@pytest.mark.django_db()
 async def test_signals_schedule_replication_on_m2m_change_false_reverse(
     test_device, second_test_device
 ):
@@ -450,7 +444,6 @@ async def test_signals_schedule_replication_on_m2m_change_false_reverse(
     sender.schedule_replication.assert_not_called()
 
 
-@pytest.mark.django_db()
 def test_signals_create_database_and_matrix_replication_target_verify_recursive_call():
     """ """
 
@@ -471,7 +464,6 @@ def test_signals_create_database_and_matrix_replication_target_verify_recursive_
     mock_create_db.assert_called_once()
 
 
-@pytest.mark.django_db()
 def test_signals_create_database_and_matrix_replication_target_verify_db_created():
     """
     #? happy path, figure out how to verify that the db was created
@@ -481,11 +473,12 @@ def test_signals_create_database_and_matrix_replication_target_verify_db_created
     create_database_and_matrix_replication_target()
 
 
-@pytest.mark.django_db()
 def test_signals_create_database_and_matrix_replication_target_no_creds_no_os_environ():
     """ """
 
-    with patch(f"fractal.cli.controllers.auth.AuthenticatedController.get_creds", return_value=None):
+    with patch(
+        f"fractal.cli.controllers.auth.AuthenticatedController.get_creds", return_value=None
+    ):
         with patch.dict(os.environ, {}, clear=True):
             with patch(f"{FILE_PATH}.logger") as mock_logger:
                 create_database_and_matrix_replication_target()
@@ -495,29 +488,33 @@ def test_signals_create_database_and_matrix_replication_target_no_creds_no_os_en
     )
 
 
-@pytest.mark.django_db()
 def test_signals_create_database_and_matrix_replication_target_no_creds_verify_os_environ():
-    """
-    #? verify that if the user isnt authenticated, the os.environ dictionary is used
-        #? right now we are calling the function before the test happens and the os.environ
-        #? is cleared but when we call the function from the test, the dict is there
-    """
+    """ """
 
-    #! not working, try something else
-    # test_homeserver = secrets.token_hex(8)
-    # test_matrix_id = secrets.token_hex(8)
-    # test_matrix_access_token = secrets.token_hex(8)
+    db_project_name = os.path.basename(settings.BASE_DIR)
+    with pytest.raises(Database.DoesNotExist):
+        Database.objects.get(name=db_project_name)
 
-    # custom_os_environ = {
-    #     'MATRIX_HOMESERVER_URL': test_homeserver,
-    #     'MATRIX_ACCESS_TOKEN': test_matrix_access_token,
-    #     'MATRIX_OWNER_MATRIX_ID': test_homeserver,
-    # }
+    create_database_and_matrix_replication_target()
 
+    d = Database.objects.get(name=db_project_name)
 
-    with patch(f"fractal.cli.controllers.auth.AuthenticatedController.get_creds", return_value=None):
-        with patch.dict('os.environ', custom_os_environ):
-            with patch('fractal_database_matrix.models.MatrixReplicationTarget.objects.get_or_create') as mock_repl_get_or_create:
-                create_database_and_matrix_replication_target()
+    assert d.name == db_project_name
+    target = d.primary_target()
+
+    assert isinstance(target, MatrixReplicationTarget)
+
+    assert target.metadata['room_id']
 
 
+def test_signals_create_database_and_matrix_replication_target_with_creds():
+    """ """
+
+    with patch(
+        "fractal.cli.controllers.auth.AuthenticatedController.get_creds",
+        return_value=("test_access_token", "test_homeserver", "test_owner_id"),
+    ):
+        with patch(
+            "fractal_database_matrix.models.MatrixReplicationTarget.objects.get_or_create"
+        ) as mock_get_or_create:
+            create_database_and_matrix_replication_target()
