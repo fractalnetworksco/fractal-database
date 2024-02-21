@@ -1,3 +1,4 @@
+import os
 import random
 import secrets
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,6 +8,7 @@ from fractal_database.models import Device, DummyReplicationTarget
 from fractal_database.signals import (
     clear_deferred_replications,
     commit,
+    create_database_and_matrix_replication_target,
     defer_replication,
     enter_signal_handler,
     increment_version,
@@ -408,7 +410,7 @@ async def test_signals_schedule_replication_on_m2m_change_true_reverse(
         instance=instance,
         action="post_add",
         reverse=True,
-        model=Device, #type: ignore
+        model=Device,  # type: ignore
         pk_set=ids,
     )
 
@@ -439,10 +441,83 @@ async def test_signals_schedule_replication_on_m2m_change_false_reverse(
         instance=instance,
         action="post_add",
         reverse=False,
-        model=Device, #type: ignore
+        model=Device,  # type: ignore
         pk_set=ids,
     )
 
     instance.save.assert_called_once()
     instance.schedule_replication.assert_not_called()
     sender.schedule_replication.assert_not_called()
+
+
+@pytest.mark.django_db()
+def test_signals_create_database_and_matrix_replication_target_verify_recursive_call():
+    """ """
+
+    mock_no_connection = MagicMock()
+    mock_no_connection.in_atomic_block = False
+
+    mock_connection = MagicMock()
+    mock_connection.in_atomic_block = True
+
+    with patch(f"{FILE_PATH}.transaction") as mock_transaction:
+        with patch(
+            f"{FILE_PATH}.create_database_and_matrix_replication_target"
+        ) as mock_create_db:
+            mock_transaction.get_connection.side_effect = [mock_no_connection, mock_connection]
+            create_database_and_matrix_replication_target()
+
+    mock_transaction.atomic.assert_called_once()
+    mock_create_db.assert_called_once()
+
+
+@pytest.mark.django_db()
+def test_signals_create_database_and_matrix_replication_target_verify_db_created():
+    """
+    #? happy path, figure out how to verify that the db was created
+        #? its working right now, just need to verify
+    """
+
+    create_database_and_matrix_replication_target()
+
+
+@pytest.mark.django_db()
+def test_signals_create_database_and_matrix_replication_target_no_creds_no_os_environ():
+    """ """
+
+    with patch(f"fractal.cli.controllers.auth.AuthenticatedController.get_creds", return_value=None):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(f"{FILE_PATH}.logger") as mock_logger:
+                create_database_and_matrix_replication_target()
+
+    mock_logger.info.assert_called_with(
+        "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixReplicationTarget creation"
+    )
+
+
+@pytest.mark.django_db()
+def test_signals_create_database_and_matrix_replication_target_no_creds_verify_os_environ():
+    """
+    #? verify that if the user isnt authenticated, the os.environ dictionary is used
+        #? right now we are calling the function before the test happens and the os.environ
+        #? is cleared but when we call the function from the test, the dict is there
+    """
+
+    #! not working, try something else
+    # test_homeserver = secrets.token_hex(8)
+    # test_matrix_id = secrets.token_hex(8)
+    # test_matrix_access_token = secrets.token_hex(8)
+
+    # custom_os_environ = {
+    #     'MATRIX_HOMESERVER_URL': test_homeserver,
+    #     'MATRIX_ACCESS_TOKEN': test_matrix_access_token,
+    #     'MATRIX_OWNER_MATRIX_ID': test_homeserver,
+    # }
+
+
+    with patch(f"fractal.cli.controllers.auth.AuthenticatedController.get_creds", return_value=None):
+        with patch.dict('os.environ', custom_os_environ):
+            with patch('fractal_database_matrix.models.MatrixReplicationTarget.objects.get_or_create') as mock_repl_get_or_create:
+                create_database_and_matrix_replication_target()
+
+
