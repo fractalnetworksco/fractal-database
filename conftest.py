@@ -1,11 +1,13 @@
 import asyncio
 import os
 import secrets
+from fractal.cli.controllers.auth import AuthController
 from typing import Generator
 from uuid import uuid4
+from unittest.mock import patch, MagicMock
 
 import pytest
-from fractal_database.models import Database, Device
+from fractal_database.models import Database, Device #MatrixCredentials
 from nio import AsyncClient
 
 # from homeserver.core.models import MatrixAccount
@@ -19,6 +21,24 @@ except KeyError as e:
         f"Please run prepare-test.py first, then source the generated environment file: {e}"
     )
 
+@pytest.fixture
+def test_database_homeserver_url() -> str:
+    return os.environ.get("TEST_HOMESERVER_URL", "http://localhost:8008")
+
+@pytest.fixture(scope="function")
+def logged_in_db_auth_controller(test_database_homeserver_url):
+    # create an AuthController object and login variables
+    auth_cntrl = AuthController()
+    matrix_id = "@admin:localhost"
+
+    # log the user in patching prompt_matrix_password to use preset password
+    with patch(
+        "fractal.cli.controllers.auth.prompt_matrix_password", new_callable=MagicMock()
+    ) as mock_password_prompt:
+        mock_password_prompt.return_value = "admin"
+        auth_cntrl.login(matrix_id=matrix_id, homeserver_url=test_database_homeserver_url)
+
+    return auth_cntrl
 
 @pytest.fixture(scope="function")
 def test_database(db):
@@ -44,6 +64,18 @@ def second_test_device(db, test_database):
     unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
 
     return Device.objects.create(name=unique_id)
+
+# @pytest.fixture(scope="function")
+# def test_matrix_creds(db, test_database):
+#     """
+#     """
+#     unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
+
+#     return MatrixCredentials.objects.create(name=unique_id)
+
+
+
+
 
 @pytest.fixture
 def test_user_access_token():
