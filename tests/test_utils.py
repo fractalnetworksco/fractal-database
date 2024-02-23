@@ -11,7 +11,7 @@ def test_utils_use_django_no_project_name():
     """ """
 
     @use_django
-    def test_use_django():
+    async def test_use_django():
         """ """
         print("using django")
 

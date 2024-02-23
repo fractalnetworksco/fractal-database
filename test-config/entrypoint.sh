@@ -11,8 +11,8 @@ PREPARE_SCRIPT="$TEST_CONFIG_DIR/prepare-test.py"
 python3 "$PREPARE_SCRIPT"
 
 # environment file should be created by prepare-test.py
-source "$TEST_CONFIG_DIR/fractal_cli.$ENV.env"
+source "$TEST_CONFIG_DIR/fractal_database.$ENV.env"
 
 cd /code
 
-pytest -v -s --asyncio-mode=auto --cov=/code/fractal --cov-report=lcov --cov-report=term tests/
+PYTHONPATH="$TEST_CONFIG_DIR/test_project" pytest -v -s --asyncio-mode=auto --cov=/code/fractal_database --cov-report=lcov --cov-report=term tests/
