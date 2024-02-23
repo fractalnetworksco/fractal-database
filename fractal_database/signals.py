@@ -301,21 +301,10 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     if creds:
         access_token, homeserver_url, owner_matrix_id = creds
     else:
-        if (
-            not os.environ.get("MATRIX_HOMESERVER_URL")
-            or not os.environ.get("MATRIX_ACCESS_TOKEN")
-            or not os.environ.get("MATRIX_OWNER_MATRIX_ID")
-        ):
-            logger.info(
-                "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixReplicationTarget creation"
-            )
-            return
-        # make sure the appropriate matrix env vars are set
-        homeserver_url = os.environ["MATRIX_HOMESERVER_URL"]
-        owner_matrix_id = os.environ["MATRIX_OWNER_MATRIX_ID"]
-        # TODO move access_token to a non-replicated model
-        access_token = os.environ["MATRIX_ACCESS_TOKEN"]
-
+        logger.warning(
+            "You must be logged in to replicate to Matrix. Not creating Matrix Replication target."
+        )
+        return
     logger.info("Creating MatrixReplicationTarget for database %s" % database)
     target, created = MatrixReplicationTarget.objects.get_or_create(
         name="matrix",

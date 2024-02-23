@@ -7,10 +7,10 @@ from uuid import uuid4
 
 import pytest
 from fractal.cli.controllers.auth import AuthController
-from fractal_database.models import Database, Device  # MatrixCredentials
+from fractal_database.models import Database, Device, DummyReplicationTarget
+from fractal_database_matrix.models import MatrixReplicationTarget, MatrixCredentials
 from nio import AsyncClient
-
-# from homeserver.core.models import MatrixAccount
+from fractal_database.signals import clear_deferred_replications
 
 try:
     TEST_HOMESERVER_URL = os.environ["MATRIX_HOMESERVER_URL"]
@@ -28,10 +28,16 @@ def test_homeserver_url() -> str:
 
 
 @pytest.fixture(scope="function")
-def logged_in_db_auth_controller(test_homeserver_url):
+def test_matrix_id() -> str:
+    """ """
+    return "@admin:localhost"
+
+
+@pytest.fixture(scope="function")
+def logged_in_db_auth_controller(test_homeserver_url, test_matrix_id):
     # create an AuthController object and login variables
     auth_cntrl = AuthController()
-    matrix_id = "@admin:localhost"
+    matrix_id = test_matrix_id
 
     # log the user in patching prompt_matrix_password to use preset password
     with patch(
@@ -70,44 +76,21 @@ def second_test_device(db, test_database):
     return Device.objects.create(name=unique_id)
 
 
-# @pytest.fixture(scope="function")
-# def test_matrix_creds(db, test_database):
-#     """
-#     """
-#     unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
-
-#     return MatrixCredentials.objects.create(name=unique_id)
-
-
-@pytest.fixture
+@pytest.fixture(scope='function')
 def test_user_access_token():
     return os.environ["MATRIX_ACCESS_TOKEN"]
 
+@pytest.fixture(autouse=True)
+def clear_db():
+    """
+    """
+    # targets = MatrixReplicationTarget.objects.all()
+    # for target in targets:
+    #     clear_deferred_replications(target.name)
 
-# @pytest.fixture(scope="function")
-# def matrix_client() -> Generator[AsyncClient, None, None]:
-#     client = AsyncClient(homeserver=TEST_HOMESERVER_URL)
-#     client.user_id = TEST_USER_USER_ID
-#     client.access_token = TEST_USER_ACCESS_TOKEN
-#     yield client
-#     asyncio.run(client.close())
-
-
-# @pytest.fixture(scope="function")
-# def test_user(db):
-#     return MatrixAccount.objects.create(matrix_id=TEST_USER_USER_ID)
-
-
-# @pytest.fixture(scope="function")
-# def database(db):
-#     return Database.objects.get()
-
-
-# @pytest.fixture
-# def test_room_id() -> str:
-#     return TEST_ROOM_ID
-
-
-# @pytest.fixture
-# def test_user_id() -> str:
-#     return TEST_USER_USER_ID
+    yield 
+    # Database.objects.all().delete()
+    # MatrixReplicationTarget.objects.all().delete()
+    # MatrixCredentials.objects.all().delete()
+    # Device.objects.all().delete()
+    # DummyReplicationTarget.objects.all().delete()

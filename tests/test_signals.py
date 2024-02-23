@@ -1,4 +1,6 @@
 import os
+from django.db import transaction
+import socket
 import random
 import secrets
 from copy import deepcopy
@@ -7,11 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from django.conf import settings
 from fractal.cli.controllers.auth import AuthenticatedController
-from fractal_database.models import (
+from fractal_database.models import (  # MatrixCredentials,
     Database,
     Device,
     DummyReplicationTarget,
-    # MatrixCredentials,
 )
 from fractal_database.signals import (
     _accept_invite,
@@ -51,6 +52,8 @@ def test_signals_enter_signal_handler_existing_nesting_count():
     """
     Tests that if there is already an existing signal count, it is incremented and is not
     equal to 1.
+
+    TODO: combine exit and enter signal handler
     """
 
     nest_count = random.randint(1, 100)
@@ -60,7 +63,6 @@ def test_signals_enter_signal_handler_existing_nesting_count():
         enter_signal_handler()
 
     assert mock_thread.signal_nesting_count == nest_count + 1
-    assert mock_thread.signal_nesting_count is not 1
 
 
 def test_signals_commit_replication_error():
@@ -151,6 +153,9 @@ def test_signals_defer_replication_target_in_defered_replications():
     assert mock_target.name in mock_thread_locals.defered_replications
     assert mock_thread_locals.defered_replications[mock_target.name][0] == mock_target
 
+    # accessing index 1 to verify that defer_replication adds the given target to the list
+    assert mock_thread_locals.defered_replications[mock_target.name][1] == mock_target
+
 
 def test_signals_clear_defered_replications_functional_test():
     """ """
@@ -175,7 +180,6 @@ def test_signals_clear_defered_replications_functional_test():
             assert mock_target.name not in mock_thread_locals.defered_replications
 
 
-@pytest.mark.skip(reason='skipping for merge')
 def test_signals_register_device_account_not_created_or_raw(test_device, second_test_device):
     """
     Tests that if created or raw are set to True, the function returns before any code
@@ -189,9 +193,9 @@ def test_signals_register_device_account_not_created_or_raw(test_device, second_
             sender=test_device, instance=second_test_device, created=False, raw=False
         )
 
-        # only raw is False
+        # both are True
         register_device_account(
-            sender=test_device, instance=second_test_device, created=True, raw=False
+            sender=test_device, instance=second_test_device, created=True, raw=True
         )
 
         # only created is False
@@ -202,44 +206,47 @@ def test_signals_register_device_account_not_created_or_raw(test_device, second_
     mock_logger.info.assert_not_called()
 
 
-@pytest.mark.skip(reason="not entering the nested function at all")
+@patch(
+    "fractal.matrix.FractalAsyncClient.register_with_token",
+)
+@patch(
+    "fractal_database_matrix.models.MatrixCredentials.objects.create",
+)
+@patch("fractal.cli.controllers.auth.AuthenticatedController")
 def test_signals_register_device_account_with_creds(
-    test_device, second_test_device, test_homeserver_url, test_user_access_token
+    mock_auth_controller,
+    mock_matrix_creds,
+    mock_register,
+    test_device,
+    test_homeserver_url,
+    test_user_access_token,
 ):
-    """
-    FIXME: figure out how to mock the classes imported within the function
-    """
+    """ """
 
     test_matrix_id = "@admin:localhost"
-    test_registration_token = "test_registration_token"
+    mock_device = MagicMock(spec=Device)
+    mock_device.name = "test_name"
+    mock_device_id = f"@{mock_device.name}:localhost"
+    mock_auth_controller.get_creds = MagicMock()
+    mock_auth_controller.get_creds.return_value = [
+        test_user_access_token,
+        test_homeserver_url,
+        test_matrix_id,
+    ]
+    mock_register.return_value = "test_access_token"
 
-    with patch("fractal.cli.controllers.auth.AuthenticatedController") as mock_auth_controller:
-        # with patch('fractal.matrix.MatrixClient') as mock_client:
+    register_device_account(sender=test_device, instance=mock_device, created=True, raw=False)
 
-        # mock_client.generate_registration_token = AsyncMock()
-        # mock_client.generate_registration_token.return_value = test_registration_token
-
-        # mock_client.whoami = AsyncMock()
-        # mock_client.user_id = test_matrix_id
-
-        # mock_client.register_with_token = AsyncMock()
-
-        mock_auth_controller.get_creds = MagicMock()
-        mock_auth_controller.get_creds.return_value = [
-            test_user_access_token,
-            test_homeserver_url,
-            test_matrix_id,
-        ]
-
-        print("calling***************")
-        register_device_account(
-            sender=test_device, instance=second_test_device, created=False, raw=False
-        )
-
-    # mock_client.whoami.assert_not_called()
+    call_args = mock_matrix_creds.call_args.kwargs
+    assert "password" in call_args
+    assert len(call_args["password"]) == 64
+    assert call_args["matrix_id"] == mock_device_id
+    assert call_args["access_token"] == "test_access_token"
+    assert call_args["target"] == Database.current_db().primary_target()
+    assert call_args["device"] == mock_device
 
 
-@pytest.mark.skip(reason="not properly getting the data from the db in the test for verification")
+# @pytest.mark.skip(reason="not properly getting the data from the db in the test for verification")
 def test_signals_increment_version(test_device, second_test_device):
     """ """
 
@@ -247,9 +254,7 @@ def test_signals_increment_version(test_device, second_test_device):
 
     increment_version(sender=second_test_device, instance=test_device)
 
-    updated_device = test_device.objects.get(pk=test_device.pk)
-
-    assert updated_device.object_version == original_version + 1
+    assert test_device.object_version == original_version + 1
 
 
 def test_signals_object_post_save_raw(test_device, second_test_device):
@@ -267,7 +272,7 @@ def test_signals_object_post_save_raw(test_device, second_test_device):
     mock_logger.info.assert_called_with(f"Loading instance from fixture: {test_device}")
 
 
-def test_signals_object_post_save_verify_recursive_call(test_device, second_test_device):
+def test_signals_object_post_save_verify_second_call(test_device, second_test_device):
     """
     Tests that if the user is not in a transaction, it will enter one before making
     a recursive call to object_post_save
@@ -330,10 +335,10 @@ def test_signals_object_post_save_not_in_nested_signal_handler(test_device, seco
     args.append(call_args_list[0][0])
     args.append(call_args_list[1][0])
 
-    not_comparison_touple = (f"Back inside post_save for instance: {test_device}",)
-    comparison_touple = (f"Outermost post save instance: {test_device}",)
-    assert not_comparison_touple not in args
-    assert comparison_touple in args
+    not_comparison_tuple = (f"Back inside post_save for instance: {test_device}",)
+    comparison_tuple = (f"Outermost post save instance: {test_device}",)
+    assert not_comparison_tuple not in args
+    assert comparison_tuple in args
     test_device.schedule_replication.assert_called_once()
 
 
@@ -406,20 +411,22 @@ async def test_signals_schedule_replication_on_m2m_change_true_reverse(
     sender.schedule_replication = MagicMock()
     instance.schedule_replication = MagicMock()
     ids = [f"{sender.id}"]
-    Device.objects.get = MagicMock(return_value=sender)
+    device_model = MagicMock(spec=Device)
+    mock_object_get = MagicMock(return_value=sender)
+    device_model.objects.get = mock_object_get
 
     result = schedule_replication_on_m2m_change(
         sender=sender,
         instance=instance,
         action="post_add",
         reverse=True,
-        model=Device,  # type: ignore
+        model=device_model,  # type: ignore
         pk_set=ids,
     )
 
     sender.save.assert_not_called()
-    sender.schedule_replication.assert_called_once()
-    instance.schedule_replication.assert_called_once()
+    sender.schedule_replication.assert_called_once_with(created=False)
+    instance.schedule_replication.assert_called_once_with(created=False)
 
 
 async def test_signals_schedule_replication_on_m2m_change_false_reverse(
@@ -436,14 +443,16 @@ async def test_signals_schedule_replication_on_m2m_change_false_reverse(
     sender.schedule_replication = MagicMock()
     instance.schedule_replication = MagicMock()
     ids = [f"{sender.id}"]
-    Device.objects.get = MagicMock(return_value=sender)
+    device_model = MagicMock(spec=Device)
+    mock_object_get = MagicMock(return_value=sender)
+    device_model.objects.get = mock_object_get
 
     result = schedule_replication_on_m2m_change(
         sender=sender,
         instance=instance,
         action="post_add",
         reverse=False,
-        model=Device,  # type: ignore
+        model=device_model,  # type: ignore
         pk_set=ids,
     )
 
@@ -452,7 +461,7 @@ async def test_signals_schedule_replication_on_m2m_change_false_reverse(
     sender.schedule_replication.assert_not_called()
 
 
-def test_signals_create_database_and_matrix_replication_target_verify_recursive_call():
+def test_signals_create_database_and_matrix_replication_target_verify_second_call():
     """ """
 
     mock_no_connection = MagicMock()
@@ -478,10 +487,14 @@ def test_signals_create_database_and_matrix_replication_target_verify_db_created
         #? its working right now, just need to verify
     """
 
+    with pytest.raises(Database.DoesNotExist):
+        Database.objects.get()
+
     create_database_and_matrix_replication_target()
 
+    db = Database.objects.get()
 
-@pytest.mark.skip(reason="might be breaking tests")
+
 def test_signals_create_database_and_matrix_replication_target_no_creds_no_os_environ():
     """
     #? patches in this test might be breaking subsequent tests
@@ -491,68 +504,44 @@ def test_signals_create_database_and_matrix_replication_target_no_creds_no_os_en
         f"fractal.cli.controllers.auth.AuthenticatedController.get_creds", return_value=None
     ):
         with patch.dict(os.environ, {}, clear=True):
-            with patch(f"{FILE_PATH}.logger") as mock_logger:
+            with patch(
+                "fractal_database_matrix.models.MatrixReplicationTarget.objects.get_or_create"
+            ) as mock_get_or_create:
                 create_database_and_matrix_replication_target()
 
-    mock_logger.info.assert_called_with(
-        "MATRIX_HOMESERVER_URL and/or MATRIX_ACCESS_TOKEN not set, skipping MatrixReplicationTarget creation"
-    )
+    mock_get_or_create.assert_not_called()
 
 
-@pytest.mark.skip(reason='skipping for merge')
-def test_signals_create_database_and_matrix_replication_target_no_creds_verify_os_environ():
+def test_signals_create_database_and_matrix_replication_target_with_creds(
+    logged_in_db_auth_controller,
+):
     """
-    #! not using the matrix owner id, keyerror
     """
+
+    # import pdb; pdb.set_trace()
+    creds = AuthenticatedController.get_creds()
 
     db_project_name = os.path.basename(settings.BASE_DIR)
-    with pytest.raises(Database.DoesNotExist):
-        Database.objects.get(name=db_project_name)
+    from fractal_database.signals import get_deferred_replications
+    print('here=========', get_deferred_replications())
 
-    with patch(
-        "fractal.cli.controllers.auth.AuthenticatedController",
-        new=MagicMock(),
-    ) as mock_controller:
-        mock_controller.get_creds = MagicMock()
-        mock_controller.get_creds.return_value = None
-        create_database_and_matrix_replication_target()
+    # if there are creds, os.environ will not be used
+    create_database_and_matrix_replication_target()
 
     d = Database.objects.get(name=db_project_name)
 
-    assert d.name == db_project_name
     target = d.primary_target()
 
     assert isinstance(target, MatrixReplicationTarget)
 
     assert target.metadata["room_id"]
 
+    device = d.devices.get()
 
-@pytest.mark.skip(reason='skipping for merge')
-def test_signals_create_database_and_matrix_replication_target_with_creds(
-    logged_in_db_auth_controller,
-):
-    """
-    #! fix this
-    """
-
-    assert AuthenticatedController.get_creds() is not None
-
-    db_project_name = os.path.basename(settings.BASE_DIR)
-
-    # if there are creds, os.environ will not be used
-    create_database_and_matrix_replication_target()
-
-    d = Database.objects.get(db_project_name)
-
-    target = d.primary_target()
-
-    assert isinstance(target, MatrixReplicationTarget)
-
-    # assert target.metadata["room_id"]
-    print("metadata========", target.metadata)
+    assert socket.gethostname().lower() in device.name
 
 
-@pytest.mark.skip(reason='not testing this correctly')
+@pytest.mark.skip(reason="not testing this correctly")
 async def test_signals_accept_invite_successful_join(test_matrix_creds):
     """ """
 
