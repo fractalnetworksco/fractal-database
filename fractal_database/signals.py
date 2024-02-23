@@ -237,6 +237,13 @@ def schedule_replication_on_m2m_change(
 
     Connected via fractal_database.apps.FractalDatabaseConfig.ready
     """
+    # ensure that the signal is called in a transaction
+    if not transaction.get_connection().in_atomic_block:
+        with transaction.atomic():
+            return schedule_replication_on_m2m_change(
+                sender, instance, action, reverse, model, pk_set, **kwargs
+            )
+
     if action not in {"post_add", "post_remove"}:
         return None
 
