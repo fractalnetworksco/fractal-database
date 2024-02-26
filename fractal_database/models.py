@@ -196,11 +196,9 @@ class ReplicatedModel(BaseModel):
 
         repr_logs = None
         for target in targets:
-            # pass this replicated model instance to the target's replication method
             if created and not target.metadata:
                 # only allow targets to create representations for themselves,
                 # targets should not create representations for other targets
-                # targets always use their own credentials
                 if isinstance(self, ReplicationTarget) and self == target:
                     repr_logs = target.create_representation_logs(self)
             else:
@@ -397,9 +395,9 @@ class ReplicationTarget(ReplicatedModel):
                         await repr_log.apply()
                         # after applying a representation for this target,
                         # we need to refresh ourself to get any latest metadata
-                        if repr_log.content_type.model_class() == self.__class__:
-                            logger.info(f"Refreshing {self} after applying representation")
-                            await self.arefresh_from_db()
+                        # if repr_log.content_type.model_class() == self.__class__:
+                        logger.info(f"Refreshing {self} after applying representation")
+                        await self.arefresh_from_db()
                         # call replicate again since apply will create new
                         # replication logs
                         return await self.replicate()

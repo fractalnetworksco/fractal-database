@@ -204,6 +204,7 @@ def object_post_save(
 
     logger.debug("in atomic block")
 
+    # TODO: Make this a context manager so we dont ever have to worry about forgetting to exit
     enter_signal_handler()
 
     increment_version(sender, instance)
