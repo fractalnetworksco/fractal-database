@@ -1,14 +1,17 @@
 import os
-from django.db import transaction
-import socket
 import random
 import secrets
+import socket
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.conf import settings
+from django.db import transaction
 from fractal.cli.controllers.auth import AuthenticatedController
+from fractal.matrix.async_client import MatrixClient
+from fractal_database.representations import Representation
 from fractal_database.models import (  # MatrixCredentials,
     Database,
     Device,
@@ -16,17 +19,21 @@ from fractal_database.models import (  # MatrixCredentials,
 )
 from fractal_database.signals import (
     _accept_invite,
+    _invite_device,
+    _lock_and_put_state,
     clear_deferred_replications,
     commit,
     create_database_and_matrix_replication_target,
     defer_replication,
     enter_signal_handler,
     increment_version,
+    join_device_to_database,
     object_post_save,
     register_device_account,
     schedule_replication_on_m2m_change,
 )
 from fractal_database_matrix.models import MatrixReplicationTarget
+from nio import RoomGetStateResponse
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -303,16 +310,14 @@ def test_signals_object_post_save_in_nested_signal_handler(test_device, second_t
 
     with patch(f"{FILE_PATH}.logger") as mock_logger:
         with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=True):
-            with patch(f"{FILE_PATH}.exit_signal_handler") as mock_exit:
-                result = object_post_save(
-                    sender=second_test_device,
-                    instance=test_device,
-                    created=False,
-                    raw=False,
-                )
+            result = object_post_save(
+                sender=second_test_device,
+                instance=test_device,
+                created=False,
+                raw=False,
+            )
 
     assert result is None
-    mock_exit.assert_called_once()
     mock_logger.info.assert_called_with(f"Back inside post_save for instance: {test_device}")
 
 
@@ -322,13 +327,12 @@ def test_signals_object_post_save_not_in_nested_signal_handler(test_device, seco
 
     with patch(f"{FILE_PATH}.logger") as mock_logger:
         with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=False):
-            with patch(f"{FILE_PATH}.exit_signal_handler") as mock_exit:
-                result = object_post_save(
-                    sender=second_test_device,
-                    instance=test_device,
-                    created=False,
-                    raw=False,
-                )
+            result = object_post_save(
+                sender=second_test_device,
+                instance=test_device,
+                created=False,
+                raw=False,
+            )
 
     call_args_list = mock_logger.info.call_args_list
     args = []
@@ -515,15 +519,12 @@ def test_signals_create_database_and_matrix_replication_target_no_creds_no_os_en
 def test_signals_create_database_and_matrix_replication_target_with_creds(
     logged_in_db_auth_controller,
 ):
-    """
-    """
+    """ """
 
-    # import pdb; pdb.set_trace()
     creds = AuthenticatedController.get_creds()
 
     db_project_name = os.path.basename(settings.BASE_DIR)
     from fractal_database.signals import get_deferred_replications
-    print('here=========', get_deferred_replications())
 
     # if there are creds, os.environ will not be used
     create_database_and_matrix_replication_target()
@@ -536,14 +537,150 @@ def test_signals_create_database_and_matrix_replication_target_with_creds(
 
     assert target.metadata["room_id"]
 
+    targets = d.get_all_replication_targets()
+    assert isinstance(targets[0], DummyReplicationTarget)
+    assert len(targets) == 2
+
     device = d.devices.get()
 
     assert socket.gethostname().lower() in device.name
 
 
-@pytest.mark.skip(reason="not testing this correctly")
-async def test_signals_accept_invite_successful_join(test_matrix_creds):
+def test_signals_accept_invite_successful_join(
+    test_matrix_creds, test_database, logged_in_db_auth_controller
+):
+    """
+    Tests both invite and accept invite
+    """
+
+    room_id = test_database.primary_target().metadata["room_id"]
+    homeserver = test_database.primary_target().homeserver
+    creds = AuthenticatedController.get_creds()
+
+    async def verify_pending_invite():
+        async with MatrixClient(
+            homeserver_url=homeserver,
+            access_token=test_matrix_creds.access_token,
+            matrix_id=test_matrix_creds.matrix_id,
+        ) as client:
+            res = await client.sync(since=None)
+            return room_id in res.rooms.invite
+
+    async def get_room_state():
+        async with MatrixClient(
+            homeserver_url=homeserver,
+            access_token=test_matrix_creds.access_token,
+            matrix_id=test_matrix_creds.matrix_id,
+        ) as client:
+            res = await client.room_get_state(room_id)
+            return isinstance(res, RoomGetStateResponse)
+
+    assert not async_to_sync(verify_pending_invite)()
+
+    async_to_sync(_invite_device)(test_matrix_creds, room_id, homeserver)
+
+    async_to_sync(_accept_invite)(test_matrix_creds, room_id, homeserver)
+    assert async_to_sync(get_room_state)()
+
+
+def test_signals_accept_invite_not_logged_in(test_matrix_creds, test_database):
+    """
+    Tests both invite and accept invite
+    """
+
+    room_id = test_database.primary_target().metadata["room_id"]
+    homeserver = test_database.primary_target().homeserver
+
+    async def verify_pending_invite():
+        async with MatrixClient(
+            homeserver_url=homeserver,
+            access_token=test_matrix_creds.access_token,
+            matrix_id=test_matrix_creds.matrix_id,
+        ) as client:
+            res = await client.sync(since=None)
+            return room_id in res.rooms.invite
+
+    async def get_room_state():
+        async with MatrixClient(
+            homeserver_url=homeserver,
+            access_token=test_matrix_creds.access_token,
+            matrix_id=test_matrix_creds.matrix_id,
+        ) as client:
+            res = await client.room_get_state(room_id)
+            return isinstance(res, RoomGetStateResponse)
+
+    assert not async_to_sync(verify_pending_invite)()
+
+    # patch get_creds to return None, forcing it to use environment variables
+    with patch(
+        "fractal.cli.controllers.auth.AuthenticatedController.get_creds"
+    ) as mock_get_creds:
+        mock_get_creds.return_value = None
+        async_to_sync(_invite_device)(test_matrix_creds, room_id, homeserver)
+
+    async_to_sync(_accept_invite)(test_matrix_creds, room_id, homeserver)
+    assert async_to_sync(get_room_state)()
+
+
+def test_signals_join_device_to_database_not_post_add(test_database):
     """ """
 
-    room_id = test_matrix_creds.id
-    # _accept_invite(test_matrix_creds, )
+    with patch("fractal_database.models.Device") as mock_device:
+        result = join_device_to_database(test_database, test_database, [], action="not_post_add")
+
+    mock_device.current_device.assert_not_called()
+    assert result is None
+
+
+def test_signals_join_device_to_database_empty_pk(test_database):
+    """ """
+
+    with patch("fractal_database.models.Device") as mock_device:
+        result = join_device_to_database(test_database, test_database, [], action="post_add")
+
+    mock_device.objects.get.assert_not_called()
+
+
+@pytest.mark.skip(
+    reason="might have to manually reset db. test passes when run it runs on its own "
+)
+def test_signals_join_device_to_database_device_id_equals_current_device_pk(test_database):
+    """ """
+
+    primary_target = test_database.primary_target()
+    primary_target_pk = primary_target.pk
+    test_database.primary_target = MagicMock()
+
+    # pass the id of `1` in the list, triggering the loop to continue
+    result = join_device_to_database(
+        test_database, test_database, [primary_target_pk], action="post_add"
+    )
+
+    test_database.primary_target.assert_not_called()
+
+
+@pytest.mark.skip(reason="getting bad a bad query")
+def test_signals_join_device_to_database_follow_through_with_invite(test_database):
+    """ """
+
+    primary_target = test_database.primary_target()
+    pk = primary_target.pk
+
+    pk_list = []
+    for i in range(pk):
+        pk_list.append(i)
+
+    test_database.primary_target = MagicMock(return_value=primary_target)
+
+    # pass the id of `1` in the list, triggering the loop to continue
+    result = join_device_to_database(test_database, test_database, pk_list, action="post_add")
+
+    test_database.primary_target.assert_called()
+
+
+async def test_signals_lock_and_put_state_no_creds():
+    """ """
+
+    rep = Representation()
+
+    

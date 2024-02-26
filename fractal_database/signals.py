@@ -360,7 +360,9 @@ async def _invite_device(
     creds = AuthenticatedController.get_creds()
     if creds:
         access_token, user_homeserver_url, owner_matrix_id = creds
-    access_token = os.environ.get("MATRIX_ACCESS_TOKEN")
+    else: 
+        user_homeserver_url = os.environ.get("MATRIX_HOMESERVER_URL")
+        access_token = os.environ.get("MATRIX_ACCESS_TOKEN")
     device_matrix_id = device_creds.matrix_id
 
     async with MatrixClient(

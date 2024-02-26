@@ -8,9 +8,9 @@ from uuid import uuid4
 import pytest
 from fractal.cli.controllers.auth import AuthController
 from fractal_database.models import Database, Device, DummyReplicationTarget
-from fractal_database_matrix.models import MatrixReplicationTarget, MatrixCredentials
-from nio import AsyncClient
 from fractal_database.signals import clear_deferred_replications
+from fractal_database_matrix.models import MatrixCredentials, MatrixReplicationTarget
+from nio import AsyncClient
 
 try:
     TEST_HOMESERVER_URL = os.environ["MATRIX_HOMESERVER_URL"]
@@ -76,21 +76,13 @@ def second_test_device(db, test_database):
     return Device.objects.create(name=unique_id)
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def test_user_access_token():
     return os.environ["MATRIX_ACCESS_TOKEN"]
 
-@pytest.fixture(autouse=True)
-def clear_db():
-    """
-    """
-    # targets = MatrixReplicationTarget.objects.all()
-    # for target in targets:
-    #     clear_deferred_replications(target.name)
 
-    yield 
-    # Database.objects.all().delete()
-    # MatrixReplicationTarget.objects.all().delete()
-    # MatrixCredentials.objects.all().delete()
-    # Device.objects.all().delete()
-    # DummyReplicationTarget.objects.all().delete()
+@pytest.fixture(scope="function")
+def test_matrix_creds(test_device):
+    """ """
+
+    return test_device.matrixcredentials_set.get()
