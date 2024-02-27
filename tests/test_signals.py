@@ -11,12 +11,8 @@ from django.conf import settings
 from django.db import transaction
 from fractal.cli.controllers.auth import AuthenticatedController
 from fractal.matrix.async_client import MatrixClient
+from fractal_database.models import Database, Device, DummyReplicationTarget
 from fractal_database.representations import Representation
-from fractal_database.models import (  # MatrixCredentials,
-    Database,
-    Device,
-    DummyReplicationTarget,
-)
 from fractal_database.signals import (
     _accept_invite,
     _invite_device,
@@ -31,9 +27,11 @@ from fractal_database.signals import (
     object_post_save,
     register_device_account,
     schedule_replication_on_m2m_change,
+    update_target_state,
 )
 from fractal_database_matrix.models import MatrixReplicationTarget
 from nio import RoomGetStateResponse
+from taskiq_matrix.lock import LockAcquireError
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -681,6 +679,79 @@ def test_signals_join_device_to_database_follow_through_with_invite(test_databas
 async def test_signals_lock_and_put_state_no_creds():
     """ """
 
-    rep = Representation()
+    test_repr = Representation()
+    mock_repl_target = MagicMock(spec=DummyReplicationTarget)
 
-    
+    with patch(
+        "fractal.cli.controllers.auth.AuthenticatedController.get_creds"
+    ) as mock_get_creds:
+        mock_get_creds.return_value = None
+        with pytest.raises(Exception) as e:
+            await _lock_and_put_state(
+                test_repr, "test_room_id", mock_repl_target, "test_state_type", {}
+            )
+
+    assert str(e.value) == "No creds found not locking and putting state"
+
+
+async def test_signals_lock_and_put_state_with_creds(logged_in_db_auth_controller, test_room_id):
+    """ """
+
+    assert AuthenticatedController.get_creds() is not None
+
+    test_repr = Representation()
+    mock_repl_target = MagicMock(spec=DummyReplicationTarget)
+    test_repr.put_state = AsyncMock()
+    test_dict = {"test": "dict"}
+    test_type = "test_state_type"
+
+    await _lock_and_put_state(test_repr, test_room_id, mock_repl_target, test_type, test_dict)
+
+    test_repr.put_state.assert_called_with(test_room_id, mock_repl_target, test_type, test_dict)
+
+
+async def test_signals_lock_and_put_state_lock_error(logged_in_db_auth_controller, test_room_id):
+    """ """
+
+    assert AuthenticatedController.get_creds() is not None
+
+    test_repr = Representation()
+    mock_repl_target = MagicMock(spec=DummyReplicationTarget)
+    test_repr.put_state = AsyncMock()
+    test_dict = {"test": "dict"}
+    test_type = "test_state_type"
+
+    with patch(f"{FILE_PATH}.MatrixLock.lock", side_effect=LockAcquireError("test message")):
+        with pytest.raises(LockAcquireError) as e:
+            await _lock_and_put_state(
+                test_repr, test_room_id, mock_repl_target, test_type, test_dict
+            )
+
+    assert str(e.value) == "test message"
+
+
+@pytest.mark.skip(
+    reason="not properly patching the instance variable in the function with the stubb class instance"
+)
+def test_signals_update_target_state_no_update():
+    """ """
+
+    class NotDatabaseOrReplTarget:
+        """
+        This class is neither a Database or MatrixReplicationTarget subclass. Sending
+        an instance of this class to update_target_state() should triggter an exception.
+        """
+
+    not_db_or_repl_target_instance = NotDatabaseOrReplTarget()
+    instance = MagicMock(spec=DummyReplicationTarget)
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.update_target_state.instance", not_db_or_repl_target_instance):
+            update_target_state(
+                instance,
+                instance,
+                created=False,
+                raw=False,
+            )
+
+    mock_logger.info.assert_not_called()

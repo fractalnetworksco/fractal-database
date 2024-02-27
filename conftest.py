@@ -16,11 +16,15 @@ try:
     TEST_HOMESERVER_URL = os.environ["MATRIX_HOMESERVER_URL"]
     TEST_USER_USER_ID = os.environ["HS_USER_ID"]
     TEST_USER_ACCESS_TOKEN = os.environ["MATRIX_ACCESS_TOKEN"]
+    TEST_ROOM_ID = os.environ['MATRIX_ROOM_ID']
 except KeyError as e:
     raise Exception(
         f"Please run prepare-test.py first, then source the generated environment file: {e}"
     )
 
+@pytest.fixture
+def test_room_id():
+    return TEST_ROOM_ID
 
 @pytest.fixture
 def test_homeserver_url() -> str:
