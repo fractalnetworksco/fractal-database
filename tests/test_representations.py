@@ -43,7 +43,7 @@ async def test_create_representation_logs_returns_correct_result():
     assert result == [mock_representation_log]
 
 
-async def test_put_state_notimplementederror():
+async def test_put_state_notimplementederror_correct():
     representation_instance = Representation()
     args = ()
     kwargs = {}
