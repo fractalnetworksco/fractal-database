@@ -7,19 +7,22 @@ from fractal_database.models import RepresentationLog
 from fractal_database.representations import Representation, get_nested_attr
 
 
-@pytest.mark.skip("test is not being detected in dict")
+# Sample class used for get_nested_attr testing, as it expects an object
+class SampleObject:
+    def __init__(self, **kwargs):
+        # Iterates over each key:value pair
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+# Don't need to test attribute path with no period because recursively calls nested attribute which goes into else statement
 async def test_get_nested_attr_test_period_split():
-    sample_object = {"test": {"nested": "value"}, "testing": "two"}
+    sample_object = SampleObject(test=SampleObject(nested="value"), testing="two")
     sample_attr_path = "test.nested"
 
     result = representations.get_nested_attr(obj=sample_object, attr_path=sample_attr_path)
 
-
-@pytest.mark.skip("test is not being detected in dict")
-async def test_get_nested_attr_path_no_period():
-    sample_object = {"test": {"nested": "value"}, "testing": "two"}
-    sample_attr_path = "test"
-    result = representations.get_nested_attr(obj=sample_object, attr_path=sample_attr_path)
+    assert result == "value"
 
 
 async def test_create_representation_logs_returns_correct_result():
@@ -40,11 +43,10 @@ async def test_create_representation_logs_returns_correct_result():
     assert result == [mock_representation_log]
 
 
-@pytest.mark.skip(
-    "Mock is wrong? Not getting into put_state function. Something weird with Representation class?"
-)
 async def test_put_state_notimplementederror():
-    mock = Representation()
-    mock.put_state = AsyncMock()
+    representation_instance = Representation()
+    args = ()
+    kwargs = {}
     with pytest.raises(NotImplementedError) as e:
-        await mock.put_state()
+        await representation_instance.put_state(*args, **kwargs)
+    assert "" in str(e.value)
