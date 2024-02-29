@@ -12,6 +12,7 @@ from django.db import transaction
 from fractal.cli.controllers.auth import AuthenticatedController
 from fractal.matrix.async_client import MatrixClient
 from fractal_database.models import Database, Device, DummyReplicationTarget
+from fractal_database_matrix.models import MatrixReplicationTarget
 from fractal_database.representations import Representation
 from fractal_database.signals import (
     _accept_invite,
@@ -37,6 +38,11 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 FILE_PATH = "fractal_database.signals"
 
+class NotDatabaseOrReplTarget:
+    """
+    This class is neither a Database or MatrixReplicationTarget subclass. 
+    Used for forced False isinstance checks.
+    """
 
 def test_signals_enter_signal_handler_no_nesting_count():
     """
@@ -733,14 +739,8 @@ async def test_signals_lock_and_put_state_lock_error(logged_in_db_auth_controlle
 @pytest.mark.skip(
     reason="not properly patching the instance variable in the function with the stubb class instance"
 )
-def test_signals_update_target_state_no_update():
+def test_signals_update_target_state_no_update_incorrect_model_type():
     """ """
-
-    class NotDatabaseOrReplTarget:
-        """
-        This class is neither a Database or MatrixReplicationTarget subclass. Sending
-        an instance of this class to update_target_state() should triggter an exception.
-        """
 
     not_db_or_repl_target_instance = NotDatabaseOrReplTarget()
     instance = MagicMock(spec=DummyReplicationTarget)
@@ -755,3 +755,129 @@ def test_signals_update_target_state_no_update():
             )
 
     mock_logger.info.assert_not_called()
+
+
+def test_signals_update_target_state_no_update_created_or_raw():
+    """
+    """
+
+    instance = MagicMock(spec=MatrixReplicationTarget)
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        # created True
+        update_target_state(
+            instance,
+            instance,
+            created=True,
+            raw=False,
+        )
+
+        # raw True
+        update_target_state(
+            instance,
+            instance,
+            created=False,
+            raw=True,
+        )
+        
+        # both True
+        update_target_state(
+            instance,
+            instance,
+            created=True,
+            raw=True,
+        )
+
+    mock_logger.info.assert_not_called()
+
+
+def test_signals_update_target_state_no_update_not_primary():
+    """
+    """
+
+    instance = MagicMock(spec=MatrixReplicationTarget)
+    instance.primary = False
+    instance.metadata.get = MagicMock()
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        update_target_state(
+            instance,
+            instance,
+            created=False,
+            raw=False,
+        )
+    
+    # if logger.info is called and instance.metadata.get is not called, there is only
+        # once case it could be
+    mock_logger.info.assert_called_once()
+    instance.metadata.get.assert_not_called()
+
+def test_signals_update_target_state_no_update_db_primary_target_not_replication_target():
+    """
+    """ 
+
+    instance = MagicMock(spec=Database)
+    instance.primary_target = MagicMock()
+    
+    target = MagicMock(spec=NotDatabaseOrReplTarget)
+    target.metadata = MagicMock()
+    target.metadata.get = MagicMock()
+    instance.primary_target.return_value = target
+
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        update_target_state(
+            instance,
+            instance,
+            created=False,
+            raw=False,
+        )
+
+    mock_logger.warning.assert_called_once()
+    target.metadata.get.assert_not_called()
+
+
+def test_signals_update_target_state_no_update_no_room_id():
+    """
+    """
+
+    instance = MagicMock(spec=MatrixReplicationTarget)
+    instance.primary = True
+    instance.metadata = MagicMock()
+    instance.metadata.get = MagicMock(return_value=None)
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        update_target_state(
+            instance,
+            instance,
+            created=False,
+            raw=False,
+        )
+    
+    instance.metadata.get.assert_called_once()
+    mock_logger.warning.assert_called_once()
+
+
+
+def test_signals_update_target_state_target_update():
+    """
+    line 475
+    """
+
+
+    instance = MagicMock(spec=MatrixReplicationTarget)
+    instance.primary = True
+
+    instance.to_fixture = MagicMock()
+    instance.to_fixture.return_value = {}
+
+    instance.get_representation_module = MagicMock()
+    instance.get_representation_module.return_value = 'test_return_value'
+
+
+
+
+def test_signals_update_target_state_db_update():
+    """
+    line 475
+    """
