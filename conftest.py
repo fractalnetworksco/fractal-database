@@ -1,9 +1,11 @@
 import asyncio
+import shutil
 import os
 import secrets
 from typing import Generator
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
+from fractal_database.signals import FRACTAL_EXPORT_DIR
 
 import pytest
 from fractal.cli.controllers.auth import AuthController
@@ -90,3 +92,12 @@ def test_matrix_creds(test_device):
     """ """
 
     return test_device.matrixcredentials_set.get()
+
+@pytest.fixture(autouse=True)
+def cleanup():
+    yield
+
+    try:
+        shutil.rmtree(FRACTAL_EXPORT_DIR)
+    except FileNotFoundError:
+        pass

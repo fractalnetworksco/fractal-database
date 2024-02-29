@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from asgiref.sync import async_to_sync
+from django.apps import AppConfig
 from django.conf import settings
 from django.db import transaction
 from fractal.cli.controllers.auth import AuthenticatedController
 from fractal.matrix.async_client import MatrixClient
 from fractal_database.models import Database, Device, DummyReplicationTarget
-from fractal_database_matrix.models import MatrixReplicationTarget
 from fractal_database.representations import Representation
 from fractal_database.signals import (
     _accept_invite,
@@ -29,6 +29,8 @@ from fractal_database.signals import (
     register_device_account,
     schedule_replication_on_m2m_change,
     update_target_state,
+    upload_exported_apps,
+    zip_django_app,
 )
 from fractal_database_matrix.models import MatrixReplicationTarget
 from nio import RoomGetStateResponse
@@ -38,11 +40,13 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 FILE_PATH = "fractal_database.signals"
 
+
 class NotDatabaseOrReplTarget:
     """
-    This class is neither a Database or MatrixReplicationTarget subclass. 
+    This class is neither a Database or MatrixReplicationTarget subclass.
     Used for forced False isinstance checks.
     """
+
 
 def test_signals_enter_signal_handler_no_nesting_count():
     """
@@ -758,8 +762,7 @@ def test_signals_update_target_state_no_update_incorrect_model_type():
 
 
 def test_signals_update_target_state_no_update_created_or_raw():
-    """
-    """
+    """ """
 
     instance = MagicMock(spec=MatrixReplicationTarget)
 
@@ -779,7 +782,7 @@ def test_signals_update_target_state_no_update_created_or_raw():
             created=False,
             raw=True,
         )
-        
+
         # both True
         update_target_state(
             instance,
@@ -792,8 +795,7 @@ def test_signals_update_target_state_no_update_created_or_raw():
 
 
 def test_signals_update_target_state_no_update_not_primary():
-    """
-    """
+    """ """
 
     instance = MagicMock(spec=MatrixReplicationTarget)
     instance.primary = False
@@ -806,24 +808,23 @@ def test_signals_update_target_state_no_update_not_primary():
             created=False,
             raw=False,
         )
-    
+
     # if logger.info is called and instance.metadata.get is not called, there is only
-        # once case it could be
+    # once case it could be
     mock_logger.info.assert_called_once()
     instance.metadata.get.assert_not_called()
 
+
 def test_signals_update_target_state_no_update_db_primary_target_not_replication_target():
-    """
-    """ 
+    """ """
 
     instance = MagicMock(spec=Database)
     instance.primary_target = MagicMock()
-    
+
     target = MagicMock(spec=NotDatabaseOrReplTarget)
     target.metadata = MagicMock()
     target.metadata.get = MagicMock()
     instance.primary_target.return_value = target
-
 
     with patch(f"{FILE_PATH}.logger") as mock_logger:
         update_target_state(
@@ -838,8 +839,7 @@ def test_signals_update_target_state_no_update_db_primary_target_not_replication
 
 
 def test_signals_update_target_state_no_update_no_room_id():
-    """
-    """
+    """ """
 
     instance = MagicMock(spec=MatrixReplicationTarget)
     instance.primary = True
@@ -853,17 +853,15 @@ def test_signals_update_target_state_no_update_no_room_id():
             created=False,
             raw=False,
         )
-    
+
     instance.metadata.get.assert_called_once()
     mock_logger.warning.assert_called_once()
-
 
 
 def test_signals_update_target_state_target_update():
     """
     line 475
     """
-
 
     instance = MagicMock(spec=MatrixReplicationTarget)
     instance.primary = True
@@ -872,12 +870,92 @@ def test_signals_update_target_state_target_update():
     instance.to_fixture.return_value = {}
 
     instance.get_representation_module = MagicMock()
-    instance.get_representation_module.return_value = 'test_return_value'
+    instance.get_representation_module.return_value = "test_return_value"
 
+    instance.metadata = MagicMock()
+    instance.metadata.get = MagicMock(return_value="test_room_id")
+    mock_repr_instance = MagicMock(spec=Representation)
 
+    expected_type = "f.database.target"
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(
+            "fractal_database.models.RepresentationLog._get_repr_instance",
+            new=MagicMock(return_value=mock_repr_instance),
+        ):
+            with patch(f"{FILE_PATH}._lock_and_put_state") as mock_lock_and_put_state:
+                update_target_state(
+                    instance,
+                    instance,
+                    created=False,
+                    raw=False,
+                )
+
+    mock_lock_and_put_state.assert_called_with(
+        mock_repr_instance, "test_room_id", instance, expected_type, {"fixture": {}}
+    )
 
 
 def test_signals_update_target_state_db_update():
     """
     line 475
     """
+
+    instance = MagicMock(spec=Database)
+    primary_target = MagicMock(spec=MatrixReplicationTarget)
+    instance.primary_target = MagicMock(return_value=primary_target)
+
+    instance.to_fixture = MagicMock()
+    instance.to_fixture.return_value = {}
+
+    primary_target.get_representation_module = MagicMock()
+    primary_target.get_representation_module.return_value = "test_return_value"
+
+    primary_target.metadata = MagicMock()
+    primary_target.metadata.get = MagicMock(return_value="test_room_id")
+    mock_repr_instance = MagicMock(spec=Representation)
+
+    expected_type = "f.database"
+
+    with patch(
+        "fractal_database.models.RepresentationLog._get_repr_instance",
+        new=MagicMock(return_value=mock_repr_instance),
+    ):
+        with patch(f"{FILE_PATH}._lock_and_put_state") as mock_lock_and_put_state:
+            update_target_state(
+                instance,
+                instance,
+                created=False,
+                raw=False,
+            )
+
+    mock_lock_and_put_state.assert_called_with(
+        mock_repr_instance, "test_room_id", primary_target, expected_type, {"fixture": {}}
+    )
+
+
+#!==========================================
+"""
+ZIP_DJANGO_APP TESTS HERE
+"""
+
+@pytest.mark.skip(reason='appconfig instance not meeting specifications for the function')
+def test_signals_zip_django_app_():
+    """ """
+
+    app_config = AppConfig(app_name="test_name", app_module="test_module")
+    zip_django_app(app_config)
+
+
+#!==========================================
+
+
+def test_signals_upload_exported_apps_filenotfound():
+    """ """
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.os.listdir", side_effect=FileNotFoundError()) as mock_listdir:
+            upload_exported_apps()
+
+    mock_logger.info.assert_called_with(
+        "No apps found in export directory. Skipping upload"
+    )

@@ -470,7 +470,7 @@ def update_target_state(
 
     instance_fixture = instance.to_fixture(json=True)
     representation_module = target.get_representation_module()
-    print(f"Got representation module: {representation_module}")
+    logger.info("Got representation module: %s" % representation_module)
     repr_instance = RepresentationLog._get_repr_instance(representation_module)
     state_type = "f.database" if isinstance(instance, Database) else "f.database.target"
     # put state needs the matrix credentials for the target so accessing the creds here
