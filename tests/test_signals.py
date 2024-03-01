@@ -6,7 +6,7 @@ from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from django.apps import AppConfig
 from django.conf import settings
 from django.db import transaction
@@ -15,6 +15,7 @@ from fractal.matrix.async_client import MatrixClient
 from fractal_database.models import Database, Device, DummyReplicationTarget
 from fractal_database.representations import Representation
 from fractal_database.signals import (
+    FRACTAL_EXPORT_DIR,
     _accept_invite,
     _invite_device,
     _lock_and_put_state,
@@ -939,12 +940,27 @@ def test_signals_update_target_state_db_update():
 ZIP_DJANGO_APP TESTS HERE
 """
 
-@pytest.mark.skip(reason='appconfig instance not meeting specifications for the function')
+
+@pytest.mark.skip(reason="appconfig instance not meeting specifications for the function")
 def test_signals_zip_django_app_():
     """ """
 
+
+    app1 = "app1"
+    app2 = "app2"
+    app3 = "app3"
+    test_dir = "."
+
+    # os.mkdir(test_dir)
+    os.mkdir(f"{test_dir}/{app1}")
+    os.mkdir(f"{test_dir}/{app2}")
+    os.mkdir(f"{test_dir}/{app3}")
+
+    assert os.path.exists(f"{test_dir}/{app1}")
+    assert os.path.exists(f"{test_dir}/{app2}")
+    assert os.path.exists(f"{test_dir}/{app3}")
     app_config = AppConfig(app_name="test_name", app_module="test_module")
-    zip_django_app(app_config)
+
 
 
 #!==========================================
@@ -956,6 +972,88 @@ def test_signals_upload_exported_apps_filenotfound():
         with patch(f"{FILE_PATH}.os.listdir", side_effect=FileNotFoundError()) as mock_listdir:
             upload_exported_apps()
 
-    mock_logger.info.assert_called_with(
-        "No apps found in export directory. Skipping upload"
-    )
+    mock_logger.info.assert_called_with("No apps found in export directory. Skipping upload")
+
+
+def test_signals_upload_exported_apps_db_doesnotexist():
+    """ """
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.os") as mock_os:
+            mock_os.listdir = MagicMock(return_value=True)
+            upload_exported_apps()
+
+    mock_logger.warning.assert_called_with("No current database found, skipping app upload")
+
+
+def test_signals_upload_exported_apps_no_primary_target(test_database):
+    """ """
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.os") as mock_os:
+            mock_os.listdir = MagicMock(return_value=True)
+            with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
+                mock_primary_target.return_value = None
+                upload_exported_apps()
+
+    mock_logger.warning.assert_called_with("No primary target found, skipping app upload")
+
+
+def test_signals_upload_exported_apps_primary_target_wrong_type(test_database):
+    """ """
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.os") as mock_os:
+            mock_os.listdir = MagicMock(return_value=True)
+            with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
+                mock_primary_target.return_value = NotDatabaseOrReplTarget()
+                assert mock_primary_target.return_value
+                upload_exported_apps()
+
+    mock_logger.warning.assert_called_with("No primary target found, skipping app upload")
+
+
+def test_signals_upload_exported_apps_no_tar_gz(test_database, test_device):
+    """ """
+
+    app1 = "app1"
+    app2 = "app2"
+    app3 = "app3"
+
+    os.mkdir(FRACTAL_EXPORT_DIR)
+    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app1}")
+    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app2}")
+    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app3}")
+    primary_target = test_database.primary_target()
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        with patch(f"{FILE_PATH}.async_to_sync") as mock_sync:
+            upload_exported_apps()
+
+    mock_sync.assert_not_called()
+    mock_logger.info.assert_not_called()
+
+
+@pytest.mark.skip(
+    reason="test should pass but im getting this error: django.core.exceptions.SynchronousOnlyOperation: You cannot call this from an async context - use a thread or sync_to_async."
+)
+async def test_signals_upload_exported_apps_tar_gz(test_database, test_device):
+    """ 
+    tried
+        sync to async
+
+    """
+
+    app1 = "app1.tar.gz"
+    app2 = "app2.tar.gz"
+    app3 = "app3.tar.gz"
+
+    os.mkdir(FRACTAL_EXPORT_DIR)
+    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app1}")
+    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app2}")
+    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app3}")
+    primary_target = test_database.primary_target()
+
+    with patch(f"{FILE_PATH}.logger") as mock_logger:
+        upload_exported_apps()
+
+    print("call count========", mock_logger.info.call_count)
