@@ -66,7 +66,6 @@ def test_device(db, test_database):
 def second_test_device(db, test_database):
     """ """
     unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
-
     return Device.objects.create(name=unique_id)
 
 

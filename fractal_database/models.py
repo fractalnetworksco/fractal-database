@@ -20,6 +20,7 @@ from .fields import SingletonField
 from .signals import defer_replication
 
 if TYPE_CHECKING:
+    from fractal_database.models import ReplicatedModel
     from fractal_database_matrix.models import (
         MatrixCredentials,
         MatrixReplicationTarget,
@@ -76,6 +77,45 @@ class DatabaseConfig(BaseModel):
         ]
 
 
+class RepresentationLog(BaseModel):
+    target = GenericForeignKey("target_type", "target_id")
+    target_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        related_name="%(app_label)s_%(class)s_target_type",
+    )
+    target_id = models.CharField(max_length=255)
+    method = models.CharField(max_length=255)
+    instance: "ReplicatedModel" = GenericForeignKey()  # type: ignore
+    object_id = models.CharField(max_length=255)
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        related_name="%(app_label)s_%(class)s_content_type",
+    )
+    metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
+
+    @classmethod
+    def _get_repr_instance(cls, module: str) -> Representation:
+        """
+        Imports and returns the provided method.
+        """
+        repr_module, repr_class = module.rsplit(".", 1)
+        repr_module = import_module(repr_module)
+        repr_class = getattr(repr_module, repr_class)
+        return repr_class()
+
+    async def apply(self) -> None:
+        model: models.Model = self.content_type.model_class()  # type: ignore
+        instance = await model.objects.aget(pk=self.object_id)
+        repr_instance = self._get_repr_instance(self.method)
+        logger.info("Calling create_representation method on: ", repr_instance)
+        metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
+        if metadata:
+            await instance.store_metadata(metadata)  # type: ignore
+        await self.aupdate(deleted=True)
+
+
 class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
@@ -117,6 +157,10 @@ class ReplicatedModel(BaseModel):
         ReplicatedModel.models.append(cls)
 
     @classmethod
+    def get_subclasses(cls, **kwargs):
+        return cls.__subclasses__()
+
+    @classmethod
     def connect_signals(cls, **kwargs):
         from fractal_database.signals import object_post_save, update_target_state
 
@@ -136,7 +180,7 @@ class ReplicatedModel(BaseModel):
             with transaction.atomic():
                 return self.schedule_replication(created=created)
 
-        print("Inside ReplicatedModel.schedule_replication()")
+        logger.debug(f"Inside ReplicatedModel.schedule_replication() for {self}")
         if not database:
             try:
                 database = Database.current_db()
@@ -147,20 +191,20 @@ class ReplicatedModel(BaseModel):
         # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         targets.extend(self.replication_targets())
+        if isinstance(self, ReplicationTarget) and self not in targets:
+            targets.append(self)
 
         repr_logs = None
         for target in targets:
-            # pass this replicated model instance to the target's replication method
-            if created or not target.metadata:
+            if created and not target.metadata:
                 # only allow targets to create representations for themselves,
                 # targets should not create representations for other targets
-                # targets always use their own credentials
                 if isinstance(self, ReplicationTarget) and self == target:
                     repr_logs = target.create_representation_logs(self)
             else:
-                print("Not creating repr for object: ", self)
+                logger.info("Not creating repr for object: ", self)
 
-            print(f"Creating replication log for target {target}")
+            logger.info(f"Creating replication log for target {target}")
             repl_log = ReplicationLog.objects.create(
                 payload=self.to_fixture(),
                 target=target,
@@ -170,7 +214,7 @@ class ReplicatedModel(BaseModel):
 
             # dummy targets return none
             if repr_logs:
-                print("Adding repr logs to repl log")
+                logger.info("Adding repr logs to repl log")
                 repl_log.repr_logs.add(*repr_logs)
 
             defer_replication(target)
@@ -347,13 +391,13 @@ class ReplicationTarget(ReplicatedModel):
                     .order_by("date_created")
                 ):
                     try:
-                        print("Calling apply for repr log: ", repr_log)
+                        logger.info("Calling apply for repr log: ", repr_log)
                         await repr_log.apply()
                         # after applying a representation for this target,
                         # we need to refresh ourself to get any latest metadata
-                        if repr_log.content_type.model_class() == self.__class__:
-                            logger.info(f"Refreshing {self} after applying representation")
-                            await self.arefresh_from_db()
+                        # if repr_log.content_type.model_class() == self.__class__:
+                        logger.info(f"Refreshing {self} after applying representation")
+                        await self.arefresh_from_db()
                         # call replicate again since apply will create new
                         # replication logs
                         return await self.replicate()
@@ -371,9 +415,9 @@ class ReplicationTarget(ReplicatedModel):
 
     async def store_metadata(self, metadata: dict) -> None:
         """
-        Store the Matrix room_id on target
+        Store the metadata on target.
         """
-        self.metadata["room_id"] = metadata["room_id"]
+        self.metadata.update(metadata)
         await self.asave()
 
     def create_representation_logs(self, instance: "ReplicatedModel"):
@@ -386,7 +430,7 @@ class ReplicationTarget(ReplicatedModel):
             return []
         repr_type = RepresentationLog._get_repr_instance(repr_module)
 
-        print(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
+        logger.info(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
         repr_logs.extend(repr_type.create_representation_logs(instance, self))
         return repr_logs
 
@@ -415,46 +459,7 @@ class ReplicationTarget(ReplicatedModel):
         ]
 
     def __str__(self) -> str:
-        return f"{self.name}"
-
-
-class RepresentationLog(BaseModel):
-    target = GenericForeignKey("target_type", "target_id")
-    target_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.CASCADE,
-        related_name="%(app_label)s_%(class)s_target_type",
-    )
-    target_id = models.CharField(max_length=255)
-    method = models.CharField(max_length=255)
-    instance: "ReplicatedModel" = GenericForeignKey()  # type: ignore
-    object_id = models.CharField(max_length=255)
-    content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.CASCADE,
-        related_name="%(app_label)s_%(class)s_content_type",
-    )
-    metadata = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
-
-    @classmethod
-    def _get_repr_instance(cls, module: str) -> Representation:
-        """
-        Imports and returns the provided method.
-        """
-        repr_module, repr_class = module.rsplit(".", 1)
-        repr_module = import_module(repr_module)
-        repr_class = getattr(repr_module, repr_class)
-        return repr_class()
-
-    async def apply(self) -> None:
-        model: models.Model = self.content_type.model_class()  # type: ignore
-        instance = await model.objects.aget(pk=self.object_id)
-        repr_instance = self._get_repr_instance(self.method)
-        print("Calling create_representation method on: ", repr_instance)
-        metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
-        if metadata:
-            await instance.store_metadata(metadata)  # type: ignore
-        await self.aupdate(deleted=True)
+        return f"{self.name} ({self.__class__.__name__})"
 
 
 class DummyReplicationTarget(ReplicationTarget):
@@ -561,6 +566,7 @@ class App(ReplicatedModel):
     created when doing `fractal install`
     """
 
+    name = models.CharField(max_length=255)
     app_instance_id = models.CharField(max_length=255, unique=True)
     metadata = models.ForeignKey(AppCatalog, on_delete=models.DO_NOTHING)
     devices = models.ManyToManyField("fractal_database.Device")
@@ -576,7 +582,6 @@ class Device(ReplicatedModel):
 
     def __str__(self) -> str:
         return self.name
-        # return str([cred.matrix_id for cred in self.matrixcredentials_set.all()])
 
     @classmethod
     def current_device(cls) -> "Device":
@@ -599,11 +604,6 @@ class Device(ReplicatedModel):
         Returns the current device.
         """
         return await sync_to_async(cls.current_device)()
-
-
-# class DeviceDatabaseConfig(ReplicatedModel):
-#     device = models.ForeignKey(Device, on_delete=models.CASCADE)
-#     database = models.ForeignKey(Database, on_delete=models.CASCADE)
 
 
 class Snapshot(ReplicatedModel):

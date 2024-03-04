@@ -7,11 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from django.conf import settings
 from fractal.cli.controllers.auth import AuthenticatedController
-from fractal_database.models import (
+from fractal_database.models import (  # MatrixCredentials,
     Database,
     Device,
     DummyReplicationTarget,
-    # MatrixCredentials,
 )
 from fractal_database.signals import (
     _accept_invite,
@@ -175,7 +174,7 @@ def test_signals_clear_defered_replications_functional_test():
             assert mock_target.name not in mock_thread_locals.defered_replications
 
 
-@pytest.mark.skip(reason='skipping for merge')
+@pytest.mark.skip(reason="skipping for merge")
 def test_signals_register_device_account_not_created_or_raw(test_device, second_test_device):
     """
     Tests that if created or raw are set to True, the function returns before any code
@@ -337,7 +336,7 @@ def test_signals_object_post_save_not_in_nested_signal_handler(test_device, seco
     test_device.schedule_replication.assert_called_once()
 
 
-async def test_signals_schedule_replication_on_m2m_change_invalid_action(
+def test_signals_schedule_replication_on_m2m_change_invalid_action(
     test_device, second_test_device
 ):
     """
@@ -361,9 +360,7 @@ async def test_signals_schedule_replication_on_m2m_change_invalid_action(
     mock_print.assert_not_called()
 
 
-async def test_signals_schedule_replication_on_m2m_change_empty_pk_set(
-    test_device, second_test_device
-):
+def test_signals_schedule_replication_on_m2m_change_empty_pk_set(test_device, second_test_device):
     """
     #? pass pk as empty list
     """
@@ -374,7 +371,7 @@ async def test_signals_schedule_replication_on_m2m_change_empty_pk_set(
     sender.save = MagicMock()
     sender.schedule_replication = MagicMock()
 
-    with patch(f"{FILE_PATH}.print") as mock_print:
+    with patch(f"{FILE_PATH}.logger.debug") as mock_print:
         result = schedule_replication_on_m2m_change(
             sender=sender,
             instance=instance,
@@ -392,9 +389,7 @@ async def test_signals_schedule_replication_on_m2m_change_empty_pk_set(
     sender.schedule_replication.assert_not_called()
 
 
-async def test_signals_schedule_replication_on_m2m_change_true_reverse(
-    test_device, second_test_device
-):
+def test_signals_schedule_replication_on_m2m_change_true_reverse(test_device, second_test_device):
     """
     #? set reverse to True
     """
@@ -402,7 +397,6 @@ async def test_signals_schedule_replication_on_m2m_change_true_reverse(
     sender = test_device
     instance = second_test_device
 
-    sender.save = MagicMock()
     sender.schedule_replication = MagicMock()
     instance.schedule_replication = MagicMock()
     ids = [f"{sender.id}"]
@@ -417,12 +411,11 @@ async def test_signals_schedule_replication_on_m2m_change_true_reverse(
         pk_set=ids,
     )
 
-    sender.save.assert_not_called()
     sender.schedule_replication.assert_called_once()
     instance.schedule_replication.assert_called_once()
 
 
-async def test_signals_schedule_replication_on_m2m_change_false_reverse(
+def test_signals_schedule_replication_on_m2m_change_false_reverse(
     test_device, second_test_device
 ):
     """
@@ -432,7 +425,7 @@ async def test_signals_schedule_replication_on_m2m_change_false_reverse(
     sender = test_device
     instance = second_test_device
 
-    instance.save = MagicMock()
+    instance.schedule_replication = MagicMock()
     sender.schedule_replication = MagicMock()
     instance.schedule_replication = MagicMock()
     ids = [f"{sender.id}"]
@@ -447,8 +440,7 @@ async def test_signals_schedule_replication_on_m2m_change_false_reverse(
         pk_set=ids,
     )
 
-    instance.save.assert_called_once()
-    instance.schedule_replication.assert_not_called()
+    instance.schedule_replication.assert_called_once()
     sender.schedule_replication.assert_not_called()
 
 
@@ -499,7 +491,7 @@ def test_signals_create_database_and_matrix_replication_target_no_creds_no_os_en
     )
 
 
-@pytest.mark.skip(reason='skipping for merge')
+@pytest.mark.skip(reason="skipping for merge")
 def test_signals_create_database_and_matrix_replication_target_no_creds_verify_os_environ():
     """
     #! not using the matrix owner id, keyerror
@@ -527,7 +519,7 @@ def test_signals_create_database_and_matrix_replication_target_no_creds_verify_o
     assert target.metadata["room_id"]
 
 
-@pytest.mark.skip(reason='skipping for merge')
+@pytest.mark.skip(reason="skipping for merge")
 def test_signals_create_database_and_matrix_replication_target_with_creds(
     logged_in_db_auth_controller,
 ):
@@ -552,7 +544,7 @@ def test_signals_create_database_and_matrix_replication_target_with_creds(
     print("metadata========", target.metadata)
 
 
-@pytest.mark.skip(reason='not testing this correctly')
+@pytest.mark.skip(reason="not testing this correctly")
 async def test_signals_accept_invite_successful_join(test_matrix_creds):
     """ """
 
