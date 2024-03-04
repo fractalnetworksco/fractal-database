@@ -47,6 +47,6 @@ async def test_put_state_notimplementederror():
     representation_instance = Representation()
     args = ()
     kwargs = {}
-    with pytest.raises(NotImplementedError) as e:
+    with pytest.raises(KeyError) as e:
         await representation_instance.put_state(*args, **kwargs)
-    assert "" in str(e.value)
+    assert isinstance(e.value, NotImplementedError)
