@@ -256,7 +256,6 @@ def schedule_replication_on_m2m_change(
             related_instance.schedule_replication(created=False)
         else:
             related_instance = instance
-            # related_instance.save()
             related_instance.schedule_replication(created=False)
 
 
