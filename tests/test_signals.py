@@ -1,6 +1,7 @@
 import os
 import random
 import secrets
+import tarfile
 import socket
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,7 +13,7 @@ from django.conf import settings
 from django.db import transaction
 from fractal.cli.controllers.auth import AuthenticatedController
 from fractal.matrix.async_client import MatrixClient
-from fractal_database.models import Database, Device, DummyReplicationTarget
+from fractal_database.models import Database, Device, DummyReplicationTarget, DatabaseConfig
 from fractal_database.representations import Representation
 from fractal_database.signals import (
     FRACTAL_EXPORT_DIR,
@@ -262,7 +263,6 @@ def test_signals_register_device_account_with_creds(
     assert call_args["device"] == mock_device
 
 
-# @pytest.mark.skip(reason="not properly getting the data from the db in the test for verification")
 def test_signals_increment_version(test_device, second_test_device):
     """ """
 
@@ -650,38 +650,32 @@ def test_signals_join_device_to_database_empty_pk(test_database):
     mock_device.objects.get.assert_not_called()
 
 
-@pytest.mark.skip(
-    reason="might have to manually reset db. test passes when run it runs on its own "
-)
 def test_signals_join_device_to_database_device_id_equals_current_device_pk(test_database):
     """ """
 
-    primary_target = test_database.primary_target()
-    primary_target_pk = primary_target.pk
     test_database.primary_target = MagicMock()
+    device = Device.current_device()
 
-    # pass the id of `1` in the list, triggering the loop to continue
+    # pass the device pk, triggering the loop to continue
     result = join_device_to_database(
-        test_database, test_database, [primary_target_pk], action="post_add"
+        test_database, test_database, [device.pk], action="post_add"
     )
 
     test_database.primary_target.assert_not_called()
 
 
-@pytest.mark.skip(reason="getting bad a bad query")
-def test_signals_join_device_to_database_follow_through_with_invite(test_database):
+def test_signals_join_device_to_database_follow_through_with_invite(test_database, test_device):
     """ """
 
     primary_target = test_database.primary_target()
     pk = primary_target.pk
 
-    pk_list = []
-    for i in range(pk):
-        pk_list.append(i)
+    device = test_device
+    pk_list = [device.pk]
 
     test_database.primary_target = MagicMock(return_value=primary_target)
 
-    # pass the id of `1` in the list, triggering the loop to continue
+    # pass the pk of the primary target in the list, triggering the loop to continue
     result = join_device_to_database(test_database, test_database, pk_list, action="post_add")
 
     test_database.primary_target.assert_called()
@@ -741,9 +735,6 @@ async def test_signals_lock_and_put_state_lock_error(logged_in_db_auth_controlle
     assert str(e.value) == "test message"
 
 
-@pytest.mark.skip(
-    reason="not properly patching the instance variable in the function with the stubb class instance"
-)
 def test_signals_update_target_state_no_update_incorrect_model_type():
     """ """
 
@@ -751,13 +742,12 @@ def test_signals_update_target_state_no_update_incorrect_model_type():
     instance = MagicMock(spec=DummyReplicationTarget)
 
     with patch(f"{FILE_PATH}.logger") as mock_logger:
-        with patch(f"{FILE_PATH}.update_target_state.instance", not_db_or_repl_target_instance):
-            update_target_state(
-                instance,
-                instance,
-                created=False,
-                raw=False,
-            )
+        update_target_state(
+            not_db_or_repl_target_instance, #type: ignore
+            not_db_or_repl_target_instance, #type: ignore
+            created=False,
+            raw=False,
+        )
 
     mock_logger.info.assert_not_called()
 
@@ -941,27 +931,39 @@ ZIP_DJANGO_APP TESTS HERE
 """
 
 
-@pytest.mark.skip(reason="appconfig instance not meeting specifications for the function")
+# @pytest.mark.skip(reason="appconfig instance not meeting specifications for the function")
 def test_signals_zip_django_app_():
     """ """
 
 
     app1 = "app1"
-    app2 = "app2"
-    app3 = "app3"
-    test_dir = "."
+    test_dir = FRACTAL_EXPORT_DIR
 
-    # os.mkdir(test_dir)
-    os.mkdir(f"{test_dir}/{app1}")
-    os.mkdir(f"{test_dir}/{app2}")
-    os.mkdir(f"{test_dir}/{app3}")
-
-    assert os.path.exists(f"{test_dir}/{app1}")
-    assert os.path.exists(f"{test_dir}/{app2}")
-    assert os.path.exists(f"{test_dir}/{app3}")
-    app_config = AppConfig(app_name="test_name", app_module="test_module")
+    os.makedirs(f"{test_dir}/{app1}", exist_ok=True)
+    os.makedirs(f"{test_dir}/extracted", exist_ok=True)
+    with open(f"{test_dir}/{app1}/xyz.py", 'w'):
+        pass
 
 
+    mock_app_config = MagicMock(spec=AppConfig)
+
+    mock_app_config.path = f"{test_dir}/{app1}"
+    mock_app_config.name = "test_name"
+
+    zip_django_app(mock_app_config)
+
+    assert os.path.exists(f"{test_dir}/{mock_app_config.name}.tar.gz")
+
+    with tarfile.open(f"{test_dir}/{mock_app_config.name}.tar.gz", "r:gz") as tar:
+        result = tar.extractall(f"{test_dir}/extracted")
+
+    all_files = []
+    for root, dirs, files in os.walk(f"{test_dir}/extracted"):
+        all_files.extend(files)
+
+    assert "pyproject.toml" in all_files    
+    assert "xyz.py" in all_files    
+    
 
 #!==========================================
 
@@ -1033,14 +1035,8 @@ def test_signals_upload_exported_apps_no_tar_gz(test_database, test_device):
     mock_logger.info.assert_not_called()
 
 
-@pytest.mark.skip(
-    reason="test should pass but im getting this error: django.core.exceptions.SynchronousOnlyOperation: You cannot call this from an async context - use a thread or sync_to_async."
-)
-async def test_signals_upload_exported_apps_tar_gz(test_database, test_device):
+def test_signals_upload_exported_apps_tar_gz(test_database, test_device):
     """ 
-    tried
-        sync to async
-
     """
 
     app1 = "app1.tar.gz"
@@ -1048,12 +1044,20 @@ async def test_signals_upload_exported_apps_tar_gz(test_database, test_device):
     app3 = "app3.tar.gz"
 
     os.mkdir(FRACTAL_EXPORT_DIR)
-    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app1}")
-    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app2}")
-    os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app3}")
+
+    with open(f"{FRACTAL_EXPORT_DIR}/{app1}", 'w') as f:
+        pass
+    with open(f"{FRACTAL_EXPORT_DIR}/{app2}", 'w') as f:
+        pass
+    with open(f"{FRACTAL_EXPORT_DIR}/{app3}", 'w') as f:
+        pass
+
     primary_target = test_database.primary_target()
 
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
+    with patch(f"{FILE_PATH}._upload_app") as mock_upload:
         upload_exported_apps()
 
-    print("call count========", mock_logger.info.call_count)
+    assert mock_upload.call_count == 3
+
+
+    

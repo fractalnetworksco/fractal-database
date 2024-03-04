@@ -360,7 +360,7 @@ async def _invite_device(
     creds = AuthenticatedController.get_creds()
     if creds:
         access_token, user_homeserver_url, owner_matrix_id = creds
-    else: 
+    else:
         user_homeserver_url = os.environ.get("MATRIX_HOMESERVER_URL")
         access_token = os.environ.get("MATRIX_ACCESS_TOKEN")
     device_matrix_id = device_creds.matrix_id
@@ -379,6 +379,10 @@ def join_device_to_database(
     """
     When a new device is added to a database, this signal sends an invite
     to the added device and automatically accepts it.
+
+    Args:
+        instance: Database instance
+        pk_set: List of device primary keys
     """
     from fractal_database.models import Device
 
@@ -525,6 +529,32 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
     logger.info("Created tarball of %s" % app_name)
 
 
+async def _upload_app(
+    room_id: str,
+    app: str,
+    repr_instance: "Representation",
+    primary_target: "MatrixReplicationTarget",
+) -> None:
+    creds = await primary_target.aget_creds()
+    async with MatrixClient(
+        homeserver_url=primary_target.homeserver,
+        access_token=creds.access_token,
+    ) as client:
+        mxc_uri = await client.upload_file(
+            f"{FRACTAL_EXPORT_DIR}/{app}",
+            filename=app,
+        )
+
+        # remove the .tar.gz part of the app name
+        app_name = app.split(".tar.gz")[0]
+        state_type = f"f.database.app.{app_name}"
+
+        await _lock_and_put_state(
+            repr_instance, room_id, primary_target, state_type, {"mxc": mxc_uri}
+        )
+        logger.info("Uploaded %s to %s" % (app, primary_target.homeserver))
+
+
 def upload_exported_apps(*args, **kwargs) -> None:
     """
     Uploads all the apps in the export directory to the primary target for
@@ -553,26 +583,6 @@ def upload_exported_apps(*args, **kwargs) -> None:
     representation_module = primary_target.get_representation_module()
     repr_instance = RepresentationLog._get_repr_instance(representation_module)
 
-    async def _upload_app(room_id: str, app: str) -> None:
-        creds = primary_target.get_creds()
-        async with MatrixClient(
-            homeserver_url=primary_target.homeserver,
-            access_token=creds.access_token,
-        ) as client:
-            mxc_uri = await client.upload_file(
-                f"{FRACTAL_EXPORT_DIR}/{app}",
-                filename=app,
-            )
-
-            # remove the .tar.gz part of the app name
-            app_name = app.split(".tar.gz")[0]
-            state_type = f"f.database.app.{app_name}"
-
-            await _lock_and_put_state(
-                repr_instance, room_id, primary_target, state_type, {"mxc": mxc_uri}
-            )
-            logger.info("Uploaded %s to %s" % (app, primary_target.homeserver))
-
     room_id = primary_target.metadata["room_id"]
 
     # get all the apps in the export directory
@@ -580,7 +590,7 @@ def upload_exported_apps(*args, **kwargs) -> None:
         if not app_name.endswith(".tar.gz"):
             continue
         logger.info(f"Uploading {app_name} to {primary_target.homeserver}")
-        async_to_sync(_upload_app)(room_id, app_name)
+        async_to_sync(_upload_app)(room_id, app_name, repr_instance, primary_target)
 
         # remove the app after uploading (maybe we keep this?)
         # os.remove(f"{FRACTAL_EXPORT_DIR}/{app_name}")
