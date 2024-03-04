@@ -109,7 +109,7 @@ class RepresentationLog(BaseModel):
         model: models.Model = self.content_type.model_class()  # type: ignore
         instance = await model.objects.aget(pk=self.object_id)
         repr_instance = self._get_repr_instance(self.method)
-        print("Calling create_representation method on: ", repr_instance)
+        logger.info("Calling create_representation method on: ", repr_instance)
         metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
         if metadata:
             await instance.store_metadata(metadata)  # type: ignore
@@ -180,7 +180,7 @@ class ReplicatedModel(BaseModel):
             with transaction.atomic():
                 return self.schedule_replication(created=created)
 
-        print(f"Inside ReplicatedModel.schedule_replication() for {self}")
+        logger.debug(f"Inside ReplicatedModel.schedule_replication() for {self}")
         if not database:
             try:
                 database = Database.current_db()
@@ -202,9 +202,9 @@ class ReplicatedModel(BaseModel):
                 if isinstance(self, ReplicationTarget) and self == target:
                     repr_logs = target.create_representation_logs(self)
             else:
-                print("Not creating repr for object: ", self)
+                logger.info("Not creating repr for object: ", self)
 
-            print(f"Creating replication log for target {target}")
+            logger.info(f"Creating replication log for target {target}")
             repl_log = ReplicationLog.objects.create(
                 payload=self.to_fixture(),
                 target=target,
@@ -214,7 +214,7 @@ class ReplicatedModel(BaseModel):
 
             # dummy targets return none
             if repr_logs:
-                print("Adding repr logs to repl log")
+                logger.info("Adding repr logs to repl log")
                 repl_log.repr_logs.add(*repr_logs)
 
             defer_replication(target)
@@ -391,7 +391,7 @@ class ReplicationTarget(ReplicatedModel):
                     .order_by("date_created")
                 ):
                     try:
-                        print("Calling apply for repr log: ", repr_log)
+                        logger.info("Calling apply for repr log: ", repr_log)
                         await repr_log.apply()
                         # after applying a representation for this target,
                         # we need to refresh ourself to get any latest metadata
@@ -430,7 +430,7 @@ class ReplicationTarget(ReplicatedModel):
             return []
         repr_type = RepresentationLog._get_repr_instance(repr_module)
 
-        print(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
+        logger.info(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
         repr_logs.extend(repr_type.create_representation_logs(instance, self))
         return repr_logs
 

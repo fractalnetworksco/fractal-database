@@ -1,7 +1,10 @@
-from typing import TYPE_CHECKING, Dict
+import logging
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fractal_database.models import ReplicatedModel, ReplicationTarget
+
+logger = logging.getLogger(__name__)
 
 
 def get_nested_attr(obj, attr_path):
@@ -34,7 +37,7 @@ class Representation:
         """
         from fractal_database.models import RepresentationLog
 
-        print("Creating representation log for", cls)
+        logger.info("Creating representation log for", cls)
         return [
             RepresentationLog.objects.create(
                 instance=instance,

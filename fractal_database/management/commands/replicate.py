@@ -1,14 +1,14 @@
-import socket
 import json
 import os
+import socket
 import sys
 
-from django.core.exceptions import ObjectDoesNotExist
-from fractal.matrix.async_client import MatrixClient
 from asgiref.sync import async_to_sync
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
-from fractal_database.models import Database, Device, DatabaseConfig
-from fractal_database_matrix.models import MatrixReplicationTarget, MatrixCredentials
+from fractal.matrix.async_client import MatrixClient
+from fractal_database.models import Database, DatabaseConfig, Device
+from fractal_database_matrix.models import MatrixCredentials, MatrixReplicationTarget
 from nio import RoomGetStateEventError
 
 
@@ -42,13 +42,15 @@ class Command(BaseCommand):
                 )
             # FIXME: Put into own function
             from fractal_database_matrix.broker import broker
+
             broker._init_queues()
             broker.replication_queue.checkpoint.since_token = None
             from fractal_database.replication.tasks import replicate_fixture
-            fixture_str = db_state_res.content['fixture']
+
+            fixture_str = db_state_res.content["fixture"]
             fixture = json.loads(fixture_str)
             await replicate_fixture(fixture)
-            fixture_str = target_state_res.content['fixture']
+            fixture_str = target_state_res.content["fixture"]
             fixture = json.loads(fixture_str)
             await replicate_fixture(fixture)
 

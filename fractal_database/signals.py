@@ -67,7 +67,7 @@ def commit(target: "ReplicationTarget") -> None:
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
     try:
-        print("Inside signals: commit")
+        logger.debug("Inside signals: commit")
         try:
             async_to_sync(target.replicate)()
         except Exception as e:
@@ -248,7 +248,7 @@ def schedule_replication_on_m2m_change(
     if action not in {"post_add", "post_remove"}:
         return None
 
-    print(f"Inside schedule_replication_on_m2m_change: {instance}")
+    logger.debug(f"Inside schedule_replication_on_m2m_change: {instance}")
     for id in pk_set:
         if reverse:
             related_instance = model.objects.get(pk=id)
@@ -351,7 +351,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     database.devices.add(device)
 
     # replicate the database now that we have a replication target
-    print(f"Replicating after adding device to database")
+    logger.debug("Replicating after adding device to database")
     database.save()
 
 
@@ -407,7 +407,7 @@ def join_device_to_database(
         # dont send an invite if the device is the current device
         # since the current device is invited in create_representation
         if device_id == current_device.pk:
-            print("Not sending invite to current device in database...")
+            logger.debug("Not sending invite to current device in database...")
             continue
 
         device = Device.objects.get(pk=device_id)

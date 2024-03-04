@@ -50,7 +50,9 @@ class FractalDatabaseConfig(AppConfig):
         # connect the signal to register the device account for the Device model and its subclasses
         models.signals.post_save.connect(register_device_account, sender=Device)
         for model in Device.get_subclasses():
-            print(f"Connecting signal for {model}")
+            logger.debug(
+                f"Connecting register_device_account signal for Device subclass: {model}"
+            )
             models.signals.post_save.connect(register_device_account, sender=model)
 
         # automatically connect schedule replication signal for replicated models that have
