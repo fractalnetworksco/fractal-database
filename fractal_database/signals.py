@@ -15,7 +15,8 @@ from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name, init_poetry_project
 from taskiq_matrix.lock import MatrixLock
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("django")
+# logger = logging.getLogger(__name__)
 
 _thread_locals = threading.local()
 
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 
 try:
     FRACTAL_EXPORT_DIR = settings.FRACTAL_EXPORT_DIR
-except:
+except AttributeError:
     FRACTAL_EXPORT_DIR = settings.BASE_DIR / "export"
 
 
@@ -66,7 +67,7 @@ def commit(target: "ReplicationTarget") -> None:
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
     try:
-        print("Inside signals: commit")
+        logger.debug("Inside signals: commit")
         try:
             async_to_sync(target.replicate)()
         except Exception as e:
@@ -164,13 +165,15 @@ def register_device_account(
 
     access_token, matrix_id, password = async_to_sync(_register_device_account)()
 
-    MatrixCredentials.objects.create(
+    target = Database.current_db().primary_target()
+
+    creds = MatrixCredentials.objects.create(
         matrix_id=matrix_id,
         password=password,
         access_token=access_token,
-        target=Database.current_db().primary_target(),
         device=instance,
     )
+    creds.targets.add(target)
 
 
 def increment_version(sender, instance, **kwargs) -> None:
@@ -201,6 +204,7 @@ def object_post_save(
 
     logger.debug("in atomic block")
 
+    # TODO: Make this a context manager so we dont ever have to worry about forgetting to exit
     enter_signal_handler()
 
     increment_version(sender, instance)
@@ -234,10 +238,17 @@ def schedule_replication_on_m2m_change(
 
     Connected via fractal_database.apps.FractalDatabaseConfig.ready
     """
+    # ensure that the signal is called in a transaction
+    if not transaction.get_connection().in_atomic_block:
+        with transaction.atomic():
+            return schedule_replication_on_m2m_change(
+                sender, instance, action, reverse, model, pk_set, **kwargs
+            )
+
     if action not in {"post_add", "post_remove"}:
         return None
 
-    print(f"Inside schedule_replication_on_m2m_change: {instance}")
+    logger.debug(f"Inside schedule_replication_on_m2m_change: {instance}")
     for id in pk_set:
         if reverse:
             related_instance = model.objects.get(pk=id)
@@ -245,8 +256,7 @@ def schedule_replication_on_m2m_change(
             related_instance.schedule_replication(created=False)
         else:
             related_instance = instance
-            related_instance.save()
-            # related_instance.schedule_replication(created=False)
+            related_instance.schedule_replication(created=False)
 
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
@@ -261,10 +271,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         Device,
         DummyReplicationTarget,
     )
-    from fractal_database_matrix.models import (
-        MatrixCredentials,
-        MatrixReplicationTarget,
-    )
+    from fractal_database_matrix.models import MatrixReplicationTarget
 
     if not transaction.get_connection().in_atomic_block:
         with transaction.atomic():
@@ -299,7 +306,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
 
     creds = AuthenticatedController.get_creds()
     if creds:
-        access_token, homeserver_url, owner_matrix_id = creds
+        _, homeserver_url, owner_matrix_id = creds
     else:
         logger.warning(
             "You must be logged in to replicate to Matrix. Not creating Matrix Replication target."
@@ -332,9 +339,8 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     database.devices.add(device)
 
     # replicate the database now that we have a replication target
-    print(f"Replicating after adding device to database")
+    logger.debug("Replicating after adding device to database")
     database.save()
-    # database.schedule_replication()
 
 
 async def _accept_invite(
@@ -395,6 +401,7 @@ def join_device_to_database(
         # dont send an invite if the device is the current device
         # since the current device is invited in create_representation
         if device_id == current_device.pk:
+            logger.debug("Not sending invite to current device in database...")
             continue
 
         device = Device.objects.get(pk=device_id)
@@ -409,12 +416,23 @@ def join_device_to_database(
             primary_target.metadata["room_id"],  # type: ignore
             primary_target.homeserver,  # type: ignore
         )
+        async_to_sync(_invite_device)(
+            device_creds,
+            primary_target.metadata["devices_room_id"],  # type: ignore
+            primary_target.homeserver,  # type: ignore
+        )
+
+        # accept invite on behalf of device
         async_to_sync(_accept_invite)(
             device_creds,
             primary_target.metadata["room_id"],  # type: ignore
             primary_target.homeserver,  # type: ignore
         )
-        # accept invite on behalf of device
+        async_to_sync(_accept_invite)(
+            device_creds,
+            primary_target.metadata["devices_room_id"],  # type: ignore
+            primary_target.homeserver,  # type: ignore
+        )
 
 
 async def _lock_and_put_state(
@@ -453,11 +471,12 @@ def update_target_state(
     if not isinstance(instance, (Database, MatrixReplicationTarget)) or raw or created:
         return None
 
-    logger.info("Updating target state for %s" % instance)
     # only update the state if the object is the primary target
     if isinstance(instance, MatrixReplicationTarget) and not instance.primary:
         return None
-    elif isinstance(instance, Database):
+    logger.info("Updating target state for %s" % instance)
+
+    if isinstance(instance, Database):
         target = instance.primary_target()
         if not target or not isinstance(target, MatrixReplicationTarget):
             logger.warning(
@@ -535,6 +554,10 @@ async def _upload_app(
     repr_instance: "Representation",
     primary_target: "MatrixReplicationTarget",
 ) -> None:
+
+    if not app.endswith(".tar.gz"):
+        return None
+
     creds = await primary_target.aget_creds()
     async with MatrixClient(
         homeserver_url=primary_target.homeserver,
@@ -594,3 +617,16 @@ def upload_exported_apps(*args, **kwargs) -> None:
 
         # remove the app after uploading (maybe we keep this?)
         # os.remove(f"{FRACTAL_EXPORT_DIR}/{app_name}")
+
+
+def initialize_fractal_app_catalog(*args, **kwargs):
+    from fractal_database.models import AppCatalog
+
+    logger.info("Initializing fractal app catalog")
+    AppCatalog.objects.get_or_create(
+        name="fractal",
+        defaults={
+            "name": "fractal",
+            "git_url": "https://github.com/fractalnetworksco/FIXME",
+        },
+    )

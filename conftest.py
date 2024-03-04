@@ -69,7 +69,7 @@ def test_database(db):
 @pytest.fixture(scope="function")
 def test_device(db, test_database):
     """ """
-    unique_id = f"test-device-{secrets.token_hex(8)[:8]}"
+    unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
 
     return Device.objects.create(name=unique_id)
 
@@ -77,7 +77,7 @@ def test_device(db, test_database):
 @pytest.fixture(scope="function")
 def second_test_device(db, test_database):
     """ """
-    unique_id = f"test-device-{secrets.token_hex(8)[:8]}"
+    unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
 
     return Device.objects.create(name=unique_id)
 
@@ -101,8 +101,3 @@ def cleanup():
         shutil.rmtree(FRACTAL_EXPORT_DIR)
     except FileNotFoundError:
         pass
-
-def device_factory():
-    """
-    """
-
