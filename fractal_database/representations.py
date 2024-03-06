@@ -37,7 +37,10 @@ class Representation:
         """
         from fractal_database.models import RepresentationLog
 
-        logger.info("Creating representation log for", cls)
+        logger.info(
+            "Target %s is creating repr log in order to create %s for instance %s"
+            % (target, cls, instance)
+        )
         return [
             RepresentationLog.objects.create(
                 instance=instance,
