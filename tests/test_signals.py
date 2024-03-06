@@ -26,6 +26,7 @@ from fractal_database.signals import (
     _invite_device,
     _lock_and_put_state,
     _upload_app,
+    get_deferred_replications,
     clear_deferred_replications,
     commit,
     create_database_and_matrix_replication_target,
@@ -62,6 +63,7 @@ def test_signals_enter_signal_handler_no_nesting_count():
     one is created for it an incremented to 1.
     """
 
+
     with patch(f"{FILE_PATH}._thread_locals", new=MagicMock()) as mock_thread:
         delattr(mock_thread, "signal_nesting_count")
 
@@ -75,21 +77,26 @@ def test_signals_enter_signal_handler_existing_nesting_count():
     """
     Tests that if there is already an existing signal count, it is incremented and is not
     equal to 1.
-
-    TODO: combine exit and enter signal handler
     """
 
+    # generate a random nest count
     nest_count = random.randint(1, 100)
 
+    # patch thread locals
     with patch(f"{FILE_PATH}._thread_locals", new=MagicMock()) as mock_thread:
+        # set the signal nesting count equal to the random number
         mock_thread.signal_nesting_count = nest_count
+        # call the function
         enter_signal_handler()
 
+    # verify that the new nest count is equal to the random number + 1
     assert mock_thread.signal_nesting_count == nest_count + 1
 
 
 def test_signals_commit_replication_error():
-    """ """
+    """ 
+    
+    """
 
     mock_target = MagicMock(spec=DummyReplicationTarget)
     mock_target.name = "test_name"
@@ -133,6 +140,7 @@ def test_signals_defer_replication_not_in_transaction():
             defer_replication(mock_target)
 
 
+
 def test_signals_defer_replication_no_defered_replications():
     """ """
 
@@ -153,6 +161,7 @@ def test_signals_defer_replication_no_defered_replications():
     mock_transaction.on_commit.assert_called_once()
     assert "test_name" in mock_thread_locals.defered_replications
     assert mock_thread_locals.defered_replications["test_name"][0] == mock_target
+    assert get_deferred_replications() == {}
 
 
 def test_signals_defer_replication_target_in_defered_replications():
@@ -267,6 +276,25 @@ def test_signals_register_device_account_with_creds(
     assert call_args["access_token"] == "test_access_token"
     assert call_args["device"] == mock_device
 
+def test_signals_register_device_account_no_creds(test_device):
+    """
+    """
+    
+    mock_device = MagicMock(spec=Device)
+    mock_device.name = "test_name"
+
+    with patch("fractal.cli.controllers.auth.AuthenticatedController") as mock_auth_controller:
+        with patch("fractal_database.models.Database.current_db") as mock_current_db:
+            with patch("fractal_database_matrix.models.MatrixCredentials.objects.create") as mock_create:
+                with patch("fractal.matrix.FractalAsyncClient.register_with_token") as mock_register:
+                    mock_register.return_value = "test_access_token"
+                    mock_create.return_value = MagicMock()
+                    mock_current_db.primary_target = MagicMock()
+                    mock_auth_controller.get_creds = MagicMock(return_value=None)
+                    assert mock_auth_controller.get_creds() is None
+                    register_device_account(sender=test_device, instance=mock_device, created=True, raw=False)
+
+    mock_create.assert_called_once()
 
 def test_signals_increment_version(test_device, second_test_device):
     """ """
@@ -660,9 +688,6 @@ def test_signals_join_device_to_database_device_id_equals_current_device_pk(test
     test_database.primary_target.assert_not_called()
 
 
-@pytest.mark.skip(
-    reason="Cannot resolve keyword 'target' into field. Choices are: access_token, date_created, date_modified, deleted, device, device_id, id, matrix_id, password, targets"
-)
 def test_signals_join_device_to_database_follow_through_with_invite(test_database, test_device):
     """ """
 
@@ -924,7 +949,6 @@ def test_signals_update_target_state_db_update():
     )
 
 
-# @pytest.mark.skip(reason="appconfig instance not meeting specifications for the function")
 def test_signals_zip_django_app_():
     """ """
 
@@ -956,7 +980,6 @@ def test_signals_zip_django_app_():
     assert "xyz.py" in all_files
 
 
-@pytest.mark.skip(reason="working as intended, just need to figure out how to mock tar.add")
 def test_signals_zip_django_app_empty_app_dir():
     """ """
     app1 = "app1"
@@ -971,7 +994,7 @@ def test_signals_zip_django_app_empty_app_dir():
     mock_app_config.name = "test_name"
 
     assert not os.path.exists(f"{mock_app_config.path}/pyproject.toml")
-    with patch(f"{FILE_PATH}.tarfile.open.add") as mock_tar_add:
+    with patch(f"{FILE_PATH}.tarfile.TarFile.add") as mock_tar_add:
         zip_django_app(mock_app_config)
 
     mock_tar_add.assert_not_called()
@@ -1035,35 +1058,38 @@ async def test_signals_upload_app_wrong_file_type():
 
     mock_repr_instance = MagicMock(spec=Representation)
 
-    await _upload_app(room_id=room_id, app=wrong_file_type, repr_instance=mock_repr_instance, primary_target=mock_primary_target)
+    await _upload_app(
+        room_id=room_id,
+        app=wrong_file_type,
+        repr_instance=mock_repr_instance,
+        primary_target=mock_primary_target,
+    )
 
     mock_primary_target.aget_creds.assert_not_called()
 
-@pytest.mark.skip(reason='almost working, cant call primary_target in async function')
-async def test_signals_upload_app_functional_test(test_database):
-    """
-    """
 
-    primary_target = test_database.primary_target()
-    room_id = primary_target.metadata['room_id']
+async def test_signals_upload_app_functional_test(test_database):
+    """ """
+
+    primary_target = await sync_to_async(test_database.primary_target)()
+    room_id = primary_target.metadata["room_id"]
     file = "test.tar.gz"
     mock_repr = MagicMock(spec=Representation)
     upload_return = secrets.token_hex(8)
 
-    with patch(f"{FILE_PATH}.FractalAsyncClient.upload_file") as mock_upload_file:
+    with patch("fractal.matrix.FractalAsyncClient.upload_file") as mock_upload_file:
         with patch(f"{FILE_PATH}._lock_and_put_state") as mock_lock_and_put:
             mock_upload_file.return_value = upload_return
             await _upload_app(room_id, file, mock_repr, primary_target)
 
     mock_upload_file.assert_called_once()
-    mock_lock_and_put.assert_called_once(
-        mock_repr,
+    mock_lock_and_put.assert_called_once_with(
+        mock_repr,  # type:ignore
         room_id,
         primary_target,
         f"f.database.app.test",
-        {"mxc": upload_return}
+        {"mxc": upload_return},
     )
-
 
 
 def test_signals_upload_exported_apps_filenotfound():
@@ -1155,3 +1181,5 @@ def test_signals_upload_exported_apps_tar_gz(test_database, test_device):
         upload_exported_apps()
 
     assert mock_upload.call_count == 3
+
+

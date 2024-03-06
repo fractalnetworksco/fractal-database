@@ -20,7 +20,7 @@ logger = logging.getLogger("django")
 
 _thread_locals = threading.local()
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma:no cover
     from fractal_database.models import (
         Database,
         Device,
@@ -407,9 +407,7 @@ def join_device_to_database(
         device = Device.objects.get(pk=device_id)
         primary_target = instance.primary_target()
 
-        device_creds = device.matrixcredentials_set.filter(
-            target__homeserver=primary_target.homeserver  # type: ignore
-        ).get()
+        device_creds = primary_target.matrixcredentials_set.get(device=device)  # type:ignore
 
         async_to_sync(_invite_device)(
             device_creds,
@@ -619,7 +617,7 @@ def upload_exported_apps(*args, **kwargs) -> None:
         # os.remove(f"{FRACTAL_EXPORT_DIR}/{app_name}")
 
 
-def initialize_fractal_app_catalog(*args, **kwargs):
+def initialize_fractal_app_catalog(*args, **kwargs):  # pragma:no cover
     from fractal_database.models import AppCatalog
 
     logger.info("Initializing fractal app catalog")
