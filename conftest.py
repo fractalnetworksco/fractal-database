@@ -101,3 +101,15 @@ def cleanup():
         shutil.rmtree(FRACTAL_EXPORT_DIR)
     except FileNotFoundError:
         pass
+
+
+@pytest.fixture(scope='function')
+def test_yaml_dict():
+    yaml_info = {
+        str(uuid4()) : str(uuid4()),
+        str(uuid4()) : str(uuid4()),
+        str(uuid4()) : str(uuid4()),
+        str(uuid4()) : str(uuid4())
+    }
+
+    return yaml_info
