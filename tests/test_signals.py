@@ -159,7 +159,7 @@ def test_signals_defer_replication_not_in_transaction():
 
 
 def test_signals_defer_replication_no_defered_replications():
-    """ 
+    """
     Tests that the function still executes when _thread_locals doesn't have a defered_replications
     attribute and one is created for it.
     """
@@ -180,7 +180,7 @@ def test_signals_defer_replication_no_defered_replications():
                 # delete the defered_replications attribute from the logger
                 delattr(mock_thread_locals, "defered_replications")
                 assert get_deferred_replications() == {}
-                
+
                 # call the function
                 defer_replication(mock_target)
 
@@ -194,8 +194,9 @@ def test_signals_defer_replication_no_defered_replications():
 
 
 def test_signals_defer_replication_target_in_defered_replications():
-    """ 
-
+    """
+    Tests the case where the target is in the defered replication dictionary of
+    _thread_local
     """
 
     # make a mock target object and generate a name for it
@@ -230,7 +231,7 @@ def test_signals_defer_replication_target_in_defered_replications():
 
 
 def test_signals_clear_defered_replications_functional_test():
-    """ 
+    """
     Tests that clear deferred replications removes the target from the defered replications
     dictionary.
     """
@@ -245,11 +246,11 @@ def test_signals_clear_defered_replications_functional_test():
         mock_transaction.get_connection.return_value = MagicMock()
         mock_transaction.get_connection.return_value.in_atomic_block = True
 
-        # patch _thread_locals 
+        # patch _thread_locals
         with patch(f"{FILE_PATH}._thread_locals") as mock_thread_locals:
             # delete the defered_replications dictionary
             delattr(mock_thread_locals, "defered_replications")
-            
+
             # call defer_replication
             defer_replication(mock_target)
 
@@ -306,7 +307,7 @@ def test_signals_register_device_account_with_creds(
     test_homeserver_url,
     test_user_access_token,
 ):
-    """ 
+    """
     Tests that if the user is logged in, credentials are used instead of the environment
     variables
     """
@@ -343,7 +344,7 @@ def test_signals_register_device_account_with_creds(
 
 
 def test_signals_register_device_account_no_creds(test_device):
-    """ 
+    """
     Tests that environment variables are used when no creds are available, allowing
     the function to continue in registering the device
     """
@@ -377,7 +378,7 @@ def test_signals_register_device_account_no_creds(test_device):
 
 
 def test_signals_increment_version(test_device, second_test_device):
-    """ 
+    """
     Tests that increment_version properly increments the objects version attribute
     """
 
@@ -392,7 +393,7 @@ def test_signals_increment_version(test_device, second_test_device):
 
 
 def test_signals_object_post_save_raw(test_device, second_test_device):
-    """ 
+    """
     Tests that the function returns before doing anything if raw is passed as True
     """
 
@@ -408,7 +409,7 @@ def test_signals_object_post_save_raw(test_device, second_test_device):
 
     # verify that None is returned
     assert result is None
-    
+
     # verify that the logger is called
     mock_logger.info.assert_called_with(f"Loading instance from fixture: {test_device}")
 
@@ -448,7 +449,7 @@ def test_signals_object_post_save_verify_second_call(test_device, second_test_de
 
 
 def test_signals_object_post_save_in_nested_signal_handler(test_device, second_test_device):
-    """ 
+    """
     Tests that None is returned before scheduling replication if you are already
     in a nested signal handler
     """
@@ -470,7 +471,7 @@ def test_signals_object_post_save_in_nested_signal_handler(test_device, second_t
 
 
 def test_signals_object_post_save_not_in_nested_signal_handler(test_device, second_test_device):
-    """ 
+    """
     Tests that the function does not return before scheduling replication if you are
     not in a nested signal handler
     """
@@ -649,8 +650,8 @@ def test_signals_schedule_replication_on_m2m_change_false_reverse(
 
 
 def test_signals_create_database_and_matrix_replication_target_verify_second_call():
-    """ 
-    Tests that if you are not in a transaction, you enter a transaction and 
+    """
+    Tests that if you are not in a transaction, you enter a transaction and
     create_database_and_matrix_replication_target is called again from within a transaction
     """
 
@@ -661,7 +662,7 @@ def test_signals_create_database_and_matrix_replication_target_verify_second_cal
     mock_connection = MagicMock()
     mock_connection.in_atomic_block = True
 
-    # patch the transaction class 
+    # patch the transaction class
     with patch(f"{FILE_PATH}.transaction") as mock_transaction:
         # patch the function
         with patch(
@@ -720,7 +721,7 @@ def test_signals_create_database_and_matrix_replication_target_no_creds():
 def test_signals_create_database_and_matrix_replication_target_with_creds(
     logged_in_db_auth_controller,
 ):
-    """ 
+    """
     Tests that the replication target is created when the user is logged in
     """
 
@@ -850,8 +851,8 @@ def test_signals_accept_invite_not_logged_in(test_matrix_creds, test_database):
 
 
 def test_signals_join_device_to_database_not_post_add(test_database):
-    """ 
-    Tests that the function returns before any actions are taken if "post_add" is not 
+    """
+    Tests that the function returns before any actions are taken if "post_add" is not
     in the kwargs dictionary
     """
 
@@ -868,7 +869,7 @@ def test_signals_join_device_to_database_not_post_add(test_database):
 
 
 def test_signals_join_device_to_database_empty_pk(test_database):
-    """ 
+    """
     Tests that the pk_set loop is a no-op if the pk list is empty
     """
 
@@ -882,14 +883,14 @@ def test_signals_join_device_to_database_empty_pk(test_database):
 
 
 def test_signals_join_device_to_database_device_id_equals_current_device_pk(test_database):
-    """ 
-    Tests that the function continues and does not send out any invites if the 
+    """
+    Tests that the function continues and does not send out any invites if the
     device id is equal to the current_device pk
     """
 
     # mock the primary_target function of the database
     test_database.primary_target = MagicMock()
-    
+
     # get the current device
     device = Device.current_device()
 
@@ -901,7 +902,7 @@ def test_signals_join_device_to_database_device_id_equals_current_device_pk(test
 
 
 def test_signals_join_device_to_database_follow_through_with_invite(test_database, test_device):
-    """ 
+    """
     Tests the functionality of the device invites within the function
     """
 
@@ -911,12 +912,12 @@ def test_signals_join_device_to_database_follow_through_with_invite(test_databas
     # store the primary key of the primary target
     pk = primary_target.pk
 
-    # store the device primary key in a list 
+    # store the device primary key in a list
     device = test_device
     pk_list = [device.pk]
 
     # mock the primary_target function of the database and have it return the primary target
-        # this is done for function call verification purposes
+    # this is done for function call verification purposes
     test_database.primary_target = MagicMock(return_value=primary_target)
 
     # pass the pk of the primary target in the list
@@ -927,13 +928,13 @@ def test_signals_join_device_to_database_follow_through_with_invite(test_databas
 
 
 async def test_signals_lock_and_put_state_no_creds():
-    """ 
+    """
     Tests that an exception is raised if the user is not logged in
     """
 
     # create a Representation object
     test_repr = Representation()
-    
+
     # create a mock Replication target object
     mock_repl_target = MagicMock(spec=DummyReplicationTarget)
 
@@ -954,7 +955,7 @@ async def test_signals_lock_and_put_state_no_creds():
 
 
 async def test_signals_lock_and_put_state_with_creds(logged_in_db_auth_controller, test_room_id):
-    """ 
+    """
     Tests that put_state is called when the user is logged in and had valid creds.
     """
 
@@ -982,7 +983,7 @@ async def test_signals_lock_and_put_state_with_creds(logged_in_db_auth_controlle
 
 
 async def test_signals_lock_and_put_state_lock_error(logged_in_db_auth_controller, test_room_id):
-    """ 
+    """
     Tests that an exception is raised if there is a lock error
     """
 
@@ -1015,7 +1016,7 @@ async def test_signals_lock_and_put_state_lock_error(logged_in_db_auth_controlle
 
 
 def test_signals_update_target_state_no_update_incorrect_model_type():
-    """ 
+    """
     Tests that the function returns if the model type is not a MatrixReplicationTarget
     """
 
@@ -1037,7 +1038,7 @@ def test_signals_update_target_state_no_update_incorrect_model_type():
 
 
 def test_signals_update_target_state_no_update_created_or_raw():
-    """ 
+    """
     Tests that the function returns if raw or created are passed as True
     """
 
@@ -1075,14 +1076,14 @@ def test_signals_update_target_state_no_update_created_or_raw():
 
 
 def test_signals_update_target_state_no_update_not_primary():
-    """ 
+    """
     Tests that the function returns of the primary attribute of the instance is False
     and the instance is a MatrixReplicationTarget
     """
 
     # create a mock MatrixReplicationTarget object
     instance = MagicMock(spec=MatrixReplicationTarget)
-    
+
     # set primary to false
     instance.primary = False
 
@@ -1106,7 +1107,7 @@ def test_signals_update_target_state_no_update_not_primary():
 
 
 def test_signals_update_target_state_no_update_db_primary_target_not_replication_target():
-    """ 
+    """
     Tests that the function returns if the primary target doesnt exist or is not a
     MatrixReplicationTarget instance
     """
@@ -1132,7 +1133,7 @@ def test_signals_update_target_state_no_update_db_primary_target_not_replication
             created=False,
             raw=False,
         )
-        
+
         # set primary_target to return None
         instance.primary_target.return_value = None
 
@@ -1144,16 +1145,15 @@ def test_signals_update_target_state_no_update_db_primary_target_not_replication
             raw=False,
         )
 
-
     # verify that the logger.warning function was called twice
     mock_logger.warning.call_count = 2
-    
+
     # verify that the room_id was never fetched using get
     target.metadata.get.assert_not_called()
 
 
 def test_signals_update_target_state_no_update_no_room_id():
-    """ 
+    """
     Tests that the target state is not updated if there is no room id
     """
 
@@ -1240,7 +1240,7 @@ def test_signals_update_target_state_db_update():
 
     # create a mock replication target object
     primary_target = MagicMock(spec=MatrixReplicationTarget)
-    
+
     # set the datatabase's primary_target function to return the mock replication target object
     instance.primary_target = MagicMock(return_value=primary_target)
 
@@ -1283,7 +1283,7 @@ def test_signals_update_target_state_db_update():
 
 
 def test_signals_zip_django_app_successful_zip():
-    """ 
+    """
     Tests the case of a successful directory zip
     """
 
@@ -1323,7 +1323,7 @@ def test_signals_zip_django_app_successful_zip():
 
 
 def test_signals_zip_django_app_empty_app_dir():
-    """ 
+    """
     Tests the case where the target directory to be zipped is empty
     """
 
@@ -1338,7 +1338,7 @@ def test_signals_zip_django_app_empty_app_dir():
 
     # verify that there is not a pyproject.toml in the app folder
     assert not os.path.exists(f"{mock_app_config.path}/pyproject.toml")
-    
+
     # patch the tarfile add function
     with patch(f"{FILE_PATH}.tarfile.TarFile.add") as mock_tar_add:
         zip_django_app(mock_app_config)
@@ -1364,7 +1364,7 @@ def test_signals_zip_django_app_empty_app_dir():
 
 
 def test_signals_zip_django_app_existing_pyproject():
-    """ 
+    """
     Tests the case where there is already an existing pyproject in the app directory
     """
 
@@ -1410,7 +1410,7 @@ def test_signals_zip_django_app_existing_pyproject():
 
 
 async def test_signals_upload_app_wrong_file_type():
-    """ 
+    """
     Tests that the function returns if the incorrect file type is passed
     """
 
@@ -1438,18 +1438,18 @@ async def test_signals_upload_app_wrong_file_type():
 
 
 async def test_signals_upload_app_functional_test(test_database):
-    """ 
+    """
     Tests that _lock_and_put_state is called if the correct file type is given and
     there no errors elsewhere in the function
     """
 
-    # get the database's primary target 
+    # get the database's primary target
     primary_target = await sync_to_async(test_database.primary_target)()
     room_id = primary_target.metadata["room_id"]
 
     # get a valid file string
     file = "test.tar.gz"
-    
+
     # create a mock representation object
     mock_repr = MagicMock(spec=Representation)
 
@@ -1477,7 +1477,7 @@ async def test_signals_upload_app_functional_test(test_database):
 
 
 def test_signals_upload_exported_apps_filenotfound():
-    """ 
+    """
     Tests that the function returns if a FileNotFoundError is caught
     """
 
@@ -1492,7 +1492,7 @@ def test_signals_upload_exported_apps_filenotfound():
 
 
 def test_signals_upload_exported_apps_db_doesnotexist():
-    """ 
+    """
     Tests that the function returns if there is no database
     """
 
@@ -1509,10 +1509,10 @@ def test_signals_upload_exported_apps_db_doesnotexist():
 
 
 def test_signals_upload_exported_apps_no_primary_target(test_database):
-    """ 
+    """
     Tests that the function returns if the primary target doesn't exist
     """
-    
+
     # patch the logger
     with patch(f"{FILE_PATH}.logger") as mock_logger:
         # patch os
@@ -1528,7 +1528,7 @@ def test_signals_upload_exported_apps_no_primary_target(test_database):
 
 
 def test_signals_upload_exported_apps_primary_target_wrong_type(test_database):
-    """ 
+    """
     Tests that the function returns when the primary type is not a MatrixReplicationTarget
     """
 
@@ -1548,7 +1548,7 @@ def test_signals_upload_exported_apps_primary_target_wrong_type(test_database):
 
 
 def test_signals_upload_exported_apps_no_tar_gz(test_database, test_device):
-    """ 
+    """
     Tests that _upload_app is not called if the file type doesn't end with ".tar.gz"
     """
 
@@ -1575,7 +1575,7 @@ def test_signals_upload_exported_apps_no_tar_gz(test_database, test_device):
 
 
 def test_signals_upload_exported_apps_tar_gz(test_database, test_device):
-    """ 
+    """
     Tests that _upload_app is called when the apps end with ".tar.gz"
     """
 
