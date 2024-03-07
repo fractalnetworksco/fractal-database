@@ -5,7 +5,7 @@ import sys
 
 from fractal_database_matrix.broker import broker
 
-logger = logging.getLogger("django")
+logger = logging.getLogger(__name__)
 
 
 def load_data_from_dicts(fixture: str) -> None:

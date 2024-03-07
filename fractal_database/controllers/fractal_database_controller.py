@@ -69,6 +69,15 @@ class FractalDatabaseController(AuthenticatedController):
 
     @use_django
     async def _sync_database_metadata(self, room_id: str, **kwargs) -> None:
+        """
+        Syncs the database and target fixtures from the room state of a given room_id.
+        Will also add the synced in target as a subspace to the primary target
+        of the current database.
+
+        Args:
+            room_id: The room ID to sync from.
+        """
+        # fetch the database and target fixtures from room state
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
             fixture = []
             res = await client.room_get_state_event(room_id, "f.database")
@@ -94,6 +103,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         from fractal_database.replication.tasks import replicate_fixture
 
+        # replicate the database and target fixtures into the database
         try:
             await replicate_fixture(json.dumps(fixture))
         except Exception as e:
@@ -135,29 +145,44 @@ class FractalDatabaseController(AuthenticatedController):
             await sync_to_async(_init_instance_database)()
             return None
 
-        target = await database.aprimary_target()
+        primary_target = await database.aprimary_target()
+        if not primary_target:
+            raise Exception(f"Failed to find primary target for database {database}")
+
         target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
             pk=added_target_pk
         )
+        # add target_to_add as a subspace to the primary target of the database
         repr_log = await sync_to_async(MatrixExistingSubSpace.create_representation_logs)(
-            target_to_add, target
+            instance=target_to_add, target=primary_target
         )
-
         await repr_log[0].apply()
 
-        # TODO: Handle publishing a users homeserver as a target for the
+        # TODO: Handle publishing a user's homeserver as a target for the
         # synced in database
 
         return None
 
     async def _sync_data(self, room_id: str) -> None:
+        """
+        Syncs all replication tasks from the epoch of a given room_id.
+
+        NOTE: Ensure before calling this function that the appropriate
+              MATRIX_ROOM_iD environment variable is set.
+
+        Args:
+            room_id: The room ID to sync from.
+        """
         from fractal_database_matrix.broker import broker
 
         # FIXME: create_filter should be moved onto the FractalAsyncClient
         from taskiq_matrix.filters import create_room_message_filter
 
+        # intialize a matrix broker in order to sync tasks.
         broker._init_queues()
 
+        # set the replication queue's checkpoint to None so that we can sync
+        # from the beginning of the room
         broker.replication_queue.checkpoint.since_token = None
         # dont need results for syncing tasks
         broker.result_backend = DummyResultBackend()  # type: ignore
