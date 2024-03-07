@@ -9,6 +9,7 @@ from fractal_database.signals import FRACTAL_EXPORT_DIR
 
 import pytest
 from fractal.cli.controllers.auth import AuthController
+from fractal.cli.utils import data_dir
 from fractal_database.models import Database, Device, DummyReplicationTarget
 from fractal_database.signals import clear_deferred_replications
 from fractal_database_matrix.models import MatrixCredentials, MatrixReplicationTarget
@@ -102,11 +103,19 @@ def cleanup():
     except FileNotFoundError:
         pass
 
+@pytest.fixture(autouse=True)
+def cleanup2():
+    yield
+
+    try:
+        shutil.rmtree(data_dir)
+    except FileNotFoundError:
+        pass
 
 @pytest.fixture(scope='function')
 def test_yaml_dict():
     yaml_info = {
-        str(uuid4()) : str(uuid4()),
+        "FRACTAL_PROJECT_NAME": str(uuid4()),
         str(uuid4()) : str(uuid4()),
         str(uuid4()) : str(uuid4()),
         str(uuid4()) : str(uuid4())
