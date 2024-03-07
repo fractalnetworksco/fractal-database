@@ -447,6 +447,10 @@ def join_device_to_database(
         pk_set: List of device primary keys
     """
     from fractal_database.models import Device
+    from fractal_database_matrix.models import (
+        MatrixCredentials,
+        MatrixReplicationTarget,
+    )
 
     if kwargs["action"] != "post_add":
         return None
@@ -464,8 +468,31 @@ def join_device_to_database(
 
         device = Device.objects.get(pk=device_id)
         primary_target = instance.primary_target()
+        if not primary_target:
+            logger.warning(
+                "No primary target found for database %s. Skipping invite for device %s"
+                % (instance, device)
+            )
+            continue
+        elif not isinstance(primary_target, MatrixReplicationTarget):
+            logger.warning(
+                "Primary target is not a MatrixReplicationTarget. Skipping invite for device %s"
+                % device
+            )
+            continue
 
-        device_creds = primary_target.matrixcredentials_set.get(device=device)  # type:ignore
+        # attempt to fetch the device's matrix credentials for the
+        try:
+            device_creds = MatrixCredentials.objects.filter(
+                device=device, targets__homeserver=primary_target.homeserver
+            ).first()
+        except MatrixCredentials.DoesNotExist:
+            # likely syncing in another user's device so we don't need to send an invite.
+            logger.warning(
+                "No MatrixCredentials found for device %s on primary target %s. Skipping invite"
+                % (device, primary_target)
+            )
+            continue
 
         async_to_sync(_invite_device)(
             device_creds,

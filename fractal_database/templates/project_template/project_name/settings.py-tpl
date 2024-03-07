@@ -34,6 +34,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 FRACTAL_EXPORT_DIR = BASE_DIR / "exports"
+FRACTAL_DATABASE_UUID_PK = True
 PROJECT_NAME = '{{ project_name }}'
 
 INSTALLED_APPS = [
