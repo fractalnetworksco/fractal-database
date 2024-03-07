@@ -7,8 +7,10 @@ import sys
 from asgiref.sync import async_to_sync
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
+from fractal.cli import FRACTAL_DATA_DIR
 from fractal.matrix.async_client import MatrixClient
 from fractal_database.models import Database, DatabaseConfig, Device
+from fractal_database.utils import get_project_name
 from fractal_database_matrix.models import MatrixCredentials, MatrixReplicationTarget
 from nio import RoomGetStateEventError
 
@@ -71,6 +73,7 @@ class Command(BaseCommand):
             device=device,
             defaults={"access_token": access_token, "target": target, "device": device},
         )
+        return database
 
     def handle(self, *args, **options):
         if not os.environ.get("MATRIX_ROOM_ID"):
@@ -95,6 +98,7 @@ class Command(BaseCommand):
             # fetch matrix credentials for current device
             current_device = Device.current_device()
             access_token = target.matrixcredentials_set.get(device=current_device).access_token
+            print(f'USING ACCESSTOKEN {access_token}')
             homeserver_url = target.homeserver
             room_id = target.metadata["room_id"]
         else:
@@ -111,15 +115,29 @@ class Command(BaseCommand):
                 ) from e
 
             logger.info("Initializing instance database")
-            async_to_sync(self._init_instance_db)(access_token, homeserver_url, room_id)
+            database = async_to_sync(self._init_instance_db)(
+                access_token, homeserver_url, room_id
+            )
 
         settings_module = os.environ.get("DJANGO_SETTINGS_MODULE")
+
+        project_name = get_project_name()
 
         process_env = os.environ.copy()
         process_env["MATRIX_ACCESS_TOKEN"] = access_token
         process_env["MATRIX_HOMESERVER_URL"] = homeserver_url
         process_env["MATRIX_ROOM_ID"] = room_id
+        process_env["PYTHONPATH"] = (
+            os.path.join(FRACTAL_DATA_DIR, project_name)
+            + os.pathsep
+            + process_env.get("PYTHONPATH", "")
+        )
         process_env["DJANGO_SETTINGS_MODULE"] = str(settings_module)
+
+        logger.info(
+            "Starting replication process for database %s (syncing from %s/room/%s)"
+            % (database, homeserver_url, room_id)
+        )
 
         # launch taskiq worker
         args = [
