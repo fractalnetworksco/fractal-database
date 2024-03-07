@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import socket
 import sys
@@ -10,6 +11,8 @@ from fractal.matrix.async_client import MatrixClient
 from fractal_database.models import Database, DatabaseConfig, Device
 from fractal_database_matrix.models import MatrixCredentials, MatrixReplicationTarget
 from nio import RoomGetStateEventError
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -35,7 +38,7 @@ class Command(BaseCommand):
                 raise CommandError(
                     f"Failed to get database configuration from room state: {db_state_res.message}"
                 )
-            target_state_res = await client.room_get_state_event(room_id, "f.database")
+            target_state_res = await client.room_get_state_event(room_id, "f.database.target")
             if isinstance(target_state_res, RoomGetStateEventError):
                 raise CommandError(
                     f"Failed to get database configuration from room state: {target_state_res.message}"
@@ -59,13 +62,13 @@ class Command(BaseCommand):
 
         await DatabaseConfig.objects.acreate(current_db=database)
 
-        device, _created = Device.objects.get_or_create(
-            name=socket.gethostname(), defaults={"name": socket.gethostname()}
+        device, _ = Device.objects.get_or_create(
+            name__icontains=socket.gethostname(), defaults={"name": socket.gethostname()}
         )
         MatrixCredentials.objects.get_or_create(
-            # access_token=access_token,
+            access_token=access_token,
             target=target,
-            # device=device,
+            device=device,
             defaults={"access_token": access_token, "target": target, "device": device},
         )
 
@@ -79,15 +82,25 @@ class Command(BaseCommand):
             # FIXME: Handle multiple replication targets. For now just using
             # MatrixReplicationTarget
             target = database.primary_target()
-            if not target or not isinstance(target, MatrixReplicationTarget):
+            if not target:
                 raise CommandError(
                     "No primary replication target configured. Have you configured the MatrixReplicationTarget?"
                 )
+            elif not isinstance(target, MatrixReplicationTarget):
+                raise CommandError(
+                    "Only MatrixReplicationTarget primary targets are supported for replication. Found %s"
+                    % target.__class__.__name__
+                )
 
-            access_token = target.matrixcredentials.access_token
+            # fetch matrix credentials for current device
+            current_device = Device.current_device()
+            access_token = target.matrixcredentials_set.get(device=current_device).access_token
             homeserver_url = target.homeserver
             room_id = target.metadata["room_id"]
         else:
+            logger.info(
+                "MATRIX_ROOM_ID is set in environment. Using environment variables for configuration."
+            )
             try:
                 room_id = os.environ["MATRIX_ROOM_ID"]
                 access_token = os.environ["MATRIX_ACCESS_TOKEN"]
@@ -97,6 +110,7 @@ class Command(BaseCommand):
                     f"Missing environment variable {e}. Have you configured the MatrixReplicationTarget?"
                 ) from e
 
+            logger.info("Initializing instance database")
             async_to_sync(self._init_instance_db)(access_token, homeserver_url, room_id)
 
         settings_module = os.environ.get("DJANGO_SETTINGS_MODULE")
