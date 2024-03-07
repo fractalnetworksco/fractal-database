@@ -43,10 +43,11 @@ async def test_create_representation_logs_returns_correct_result():
     assert result == [mock_representation_log]
 
 
+@pytest.mark.asyncio
 async def test_put_state_notimplementederror():
     representation_instance = Representation()
     args = ()
     kwargs = {}
-    with pytest.raises(KeyError) as e:
+    with pytest.raises(NotImplementedError) as e:
         await representation_instance.put_state(*args, **kwargs)
     assert isinstance(e.value, NotImplementedError)
