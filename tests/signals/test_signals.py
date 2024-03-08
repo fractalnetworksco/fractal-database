@@ -176,16 +176,14 @@ def test_signals_defer_replication_no_defered_replications():
 
         # patch _thread_locals and the logger
         with patch(f"{FILE_PATH}._thread_locals") as mock_thread_locals:
-            with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
-                # delete the defered_replications attribute from the logger
-                delattr(mock_thread_locals, "defered_replications")
-                assert get_deferred_replications() == {}
+            # delete the defered_replications attribute from the logger
+            delattr(mock_thread_locals, "defered_replications")
+            assert get_deferred_replications() == {}
 
-                # call the function
-                defer_replication(mock_target)
+            # call the function
+            defer_replication(mock_target)
 
-    # verify that the logger and on_commit were called
-    mock_logger.info.assert_called_with(f"Registering on_commit for {mock_target.name}")
+    # verify on_commit was called
     mock_transaction.on_commit.assert_called_once()
 
     # verify that the target's name is in the defered_replications dictionary
@@ -211,13 +209,9 @@ def test_signals_defer_replication_target_in_defered_replications():
 
         # patch the _thread_locals and the logger
         with patch(f"{FILE_PATH}._thread_locals") as mock_thread_locals:
-            with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
-                # set the defered_replications dictionary to include the target
-                mock_thread_locals.defered_replications = {mock_target.name: [mock_target]}
-                defer_replication(mock_target)
-
-    # verify taht the logger was called
-    mock_logger.info.assert_called_once()
+            # set the defered_replications dictionary to include the target
+            mock_thread_locals.defered_replications = {mock_target.name: [mock_target]}
+            defer_replication(mock_target)
 
     # verify that on_commit was not called
     mock_transaction.on_commit.assert_not_called()
@@ -454,20 +448,25 @@ def test_signals_object_post_save_in_nested_signal_handler(test_device, second_t
     in a nested signal handler
     """
 
-    # patch the logger and in_nested_signal_handler
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
-        with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=True):
-            # call the function
-            result = object_post_save(
-                sender=second_test_device,
-                instance=test_device,
-                created=False,
-                raw=False,
-            )
+    # mock the device's schedule_replication function
+    test_device.schedule_replication = MagicMock()
+
+    # patch in_nested_signal_handler and exit_signal_handler
+    with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=True):
+        # call the function
+        result = object_post_save(
+            sender=second_test_device,
+            instance=test_device,
+            created=False,
+            raw=False,
+        )
 
     # verify that the function returned None and that the expected logger call was made
+        # NOTE: There is only one case where None is returned when "raw" is False
     assert result is None
-    mock_logger.info.assert_called_with(f"Back inside post_save for instance: {test_device}")
+    
+    # verify that schedule_replication was not called
+    test_device.schedule_replication.assert_not_called()
 
 
 def test_signals_object_post_save_not_in_nested_signal_handler(test_device, second_test_device):
@@ -479,28 +478,15 @@ def test_signals_object_post_save_not_in_nested_signal_handler(test_device, seco
     # mock the device's schedule_replication function
     test_device.schedule_replication = MagicMock()
 
-    # patch the logger and in_nested_signal_handler
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
-        with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=False):
-            # call the function
-            result = object_post_save(
-                sender=second_test_device,
-                instance=test_device,
-                created=False,
-                raw=False,
-            )
-
-    # store the call args for the logger
-    call_args_list = mock_logger.info.call_args_list
-    args = []
-    args.append(call_args_list[0][0])
-    args.append(call_args_list[1][0])
-
-    # verify that the appropriate calls were made
-    not_comparison_tuple = (f"Back inside post_save for instance: {test_device}",)
-    comparison_tuple = (f"Outermost post save instance: {test_device}",)
-    assert not_comparison_tuple not in args
-    assert comparison_tuple in args
+    # patch in_nested_signal_handler
+    with patch(f"{FILE_PATH}.in_nested_signal_handler", return_value=False):
+        # call the function
+        result = object_post_save(
+            sender=second_test_device,
+            instance=test_device,
+            created=False,
+            raw=False,
+        )
 
     # verify that schedule_replication was called
     test_device.schedule_replication.assert_called_once()
@@ -546,31 +532,28 @@ def test_signals_schedule_replication_on_m2m_change_empty_pk_set(test_device, se
     sender = test_device
     instance = second_test_device
 
-    # mock the sender's schedule_replication function
-    sender.save = MagicMock()
-    sender.schedule_replication = MagicMock()
+    # mock the instance's schedule_replication function
+    instance.schedule_replication = MagicMock()
 
-    # patch the logger
-    with patch(f"{FILE_PATH}.logger.debug") as mock_logger:
-        # call the function passing an empty pk set
-        result = schedule_replication_on_m2m_change(
-            sender=sender,
-            instance=instance,
-            action="post_add",
-            reverse=True,
-            model=sender,
-            pk_set=[],
-        )
+    # call the function passing an empty pk set
+    result = schedule_replication_on_m2m_change(
+        sender=sender,
+        instance=instance,
+        action="post_add",
+        reverse=True,
+        model=sender,
+        pk_set=[],
+    )
 
-    # verify that you got passed the "action" check
-    mock_logger.assert_called_once()
 
     # verify that the for loop was a no-op
-    sender.save.assert_not_called()
-    sender.schedule_replication.assert_not_called()
+        # NOTE: The instance's schedule_replication is called in both the "if" and the
+        # "else" block of the for loop. If neither are called, then the for loop did
+        # not execute.
+    instance.schedule_replication.assert_not_called()
 
 
-def test_signals_schedule_replication_on_m2m_change_true_reverse(test_device, second_test_device):
+def test_signals_schedule_replication_on_m2m_change_pk_set_not_empty(test_device, second_test_device):
     """
     Tests that a related instance is fetched and has a replication scheduled if reverse
     is passed as True
@@ -605,48 +588,6 @@ def test_signals_schedule_replication_on_m2m_change_true_reverse(test_device, se
     # verify that both schedule replications are called
     sender.schedule_replication.assert_called_once_with(created=False)
     instance.schedule_replication.assert_called_once_with(created=False)
-
-
-def test_signals_schedule_replication_on_m2m_change_false_reverse(
-    test_device, second_test_device
-):
-    """
-    Tests that only the instance's schedule replication is called if reverse is passed
-    as False
-    """
-
-    # establish a sender and instance device
-    sender = test_device
-    instance = second_test_device
-
-    # mock the schedule_replications for both
-    instance.schedule_replication = MagicMock()
-    sender.schedule_replication = MagicMock()
-    instance.schedule_replication = MagicMock()
-
-    # store the id of the sender in a list
-    ids = [f"{sender.id}"]
-
-    # create a mock device model
-    device_model = MagicMock(spec=Device)
-    mock_object_get = MagicMock(return_value=sender)
-    device_model.objects.get = mock_object_get
-
-    # call the function passing reverse as False
-    result = schedule_replication_on_m2m_change(
-        sender=sender,
-        instance=instance,
-        action="post_add",
-        reverse=False,
-        model=device_model,  # type: ignore
-        pk_set=ids,
-    )
-
-    # verify that the instance's schedule_replication function is called
-    instance.schedule_replication.assert_called_once()
-
-    # verify that the sender's schedule_replication is not called
-    sender.schedule_replication.assert_not_called()
 
 
 def test_signals_create_database_and_matrix_replication_target_verify_second_call():
@@ -779,7 +720,7 @@ def test_signals_accept_invite_successful_join(
             matrix_id=test_matrix_creds.matrix_id,
         ) as client:
             res = await client.sync(since=None)
-            return room_id in res.rooms.invite
+            return room_id in res.rooms.invite # type: ignore
 
     # function for getting the room state
     async def get_room_state():
@@ -821,7 +762,7 @@ def test_signals_accept_invite_not_logged_in(test_matrix_creds, test_database):
             matrix_id=test_matrix_creds.matrix_id,
         ) as client:
             res = await client.sync(since=None)
-            return room_id in res.rooms.invite
+            return room_id in res.rooms.invite # type: ignore
 
     # function for getting the room state
     async def get_room_state():
@@ -1481,14 +1422,15 @@ def test_signals_upload_exported_apps_filenotfound():
     Tests that the function returns if a FileNotFoundError is caught
     """
 
-    # patch the logger
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
+    # patch current_db
+    with patch('fractal_database.models.Database.current_db') as mock_current_db:
         # set os.listdir to raise an Error
         with patch(f"{FILE_PATH}.os.listdir", side_effect=FileNotFoundError()) as mock_listdir:
             upload_exported_apps()
 
-    # verify that the expected logger call was made and the function returned
-    mock_logger.info.assert_called_with("No apps found in export directory. Skipping upload")
+    # verify that current_db was never called, meaning the functioned returned due to a
+            # FileNotFoundError
+    mock_current_db.assert_not_called()
 
 
 def test_signals_upload_exported_apps_db_doesnotexist():
@@ -1496,16 +1438,19 @@ def test_signals_upload_exported_apps_db_doesnotexist():
     Tests that the function returns if there is no database
     """
 
-    # patch the logger
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
-        # patch the os library
-        with patch(f"{FILE_PATH}.os") as mock_os:
-            # set os.listdir to return True
+    with pytest.raises(Database.DoesNotExist):
+        database = Database.current_db()
+
+    # patch the os library
+    with patch(f"{FILE_PATH}.os") as mock_os:
+        # set os.listdir to return True
+        with patch('fractal_database.models.Database.primary_target') as mock_primary_target:
             mock_os.listdir = MagicMock(return_value=True)
             upload_exported_apps()
 
-    # verify that the expected logger warning was called
-    mock_logger.warning.assert_called_with("No current database found, skipping app upload")
+    # verify that primary_target was not called, meaning the function returned
+            # while trying to fetch the current database
+    mock_primary_target.assert_not_called()
 
 
 def test_signals_upload_exported_apps_no_primary_target(test_database):
@@ -1513,18 +1458,18 @@ def test_signals_upload_exported_apps_no_primary_target(test_database):
     Tests that the function returns if the primary target doesn't exist
     """
 
-    # patch the logger
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
-        # patch os
-        with patch(f"{FILE_PATH}.os") as mock_os:
-            mock_os.listdir = MagicMock(return_value=True)
-            # patch primary_target to return None
-            with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
-                mock_primary_target.return_value = None
+    # patch os
+    with patch(f"{FILE_PATH}.os") as mock_os:
+        mock_os.listdir = MagicMock(return_value=True)
+        # patch primary_target to return None
+        with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
+            mock_primary_target.return_value = None
+            with patch(f"{FILE_PATH}.isinstance") as mock_isinstance:
                 upload_exported_apps()
 
-    # verify that the expected logger warning was called
-    mock_logger.warning.assert_called_with("No primary target found, skipping app upload")
+    # verify that isinstance is never called, meaning the function returned when attempting
+            # to fetch the primary target
+    mock_isinstance.assert_not_called()
 
 
 def test_signals_upload_exported_apps_primary_target_wrong_type(test_database):
@@ -1532,19 +1477,21 @@ def test_signals_upload_exported_apps_primary_target_wrong_type(test_database):
     Tests that the function returns when the primary type is not a MatrixReplicationTarget
     """
 
-    # patch the logger
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
-        # patch os
-        with patch(f"{FILE_PATH}.os") as mock_os:
-            mock_os.listdir = MagicMock(return_value=True)
-            # patch primary_target to return a non-MatrixReplicationTarget object
-            with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
-                mock_primary_target.return_value = NotDatabaseOrReplTarget()
-                assert mock_primary_target.return_value
-                upload_exported_apps()
+    # patch os
+    with patch(f"{FILE_PATH}.os") as mock_os:
+        mock_os.listdir = MagicMock(return_value=True)
+        # patch primary_target to return a non-MatrixReplicationTarget object
+        with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
+            
+            # make a mock object that is not a MatrixReplicationTarget
+            mock_wrong_type = MagicMock(spec=NotDatabaseOrReplTarget)
+            mock_wrong_type.get_representation_module = MagicMock()
+            mock_primary_target.return_value = mock_wrong_type
+            assert mock_primary_target.return_value
+            upload_exported_apps()
 
-    # verify that the expected logger.warning call was made
-    mock_logger.warning.assert_called_with("No primary target found, skipping app upload")
+    # verify that the mock object's get_representation_module function was not called
+    mock_wrong_type.get_representation_module.assert_not_called()
 
 
 def test_signals_upload_exported_apps_no_tar_gz(test_database, test_device):
@@ -1561,17 +1508,12 @@ def test_signals_upload_exported_apps_no_tar_gz(test_database, test_device):
     os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app2}")
     os.mkdir(f"{FRACTAL_EXPORT_DIR}/{app3}")
 
-    # patch the logger
-    with patch(f"{FILE_PATH}.logger") as mock_logger:
-        # patch async_to_sync, which is used to call _upload_app
-        with patch(f"{FILE_PATH}.async_to_sync") as mock_sync:
-            upload_exported_apps()
+    # patch async_to_sync, which is used to call _upload_app
+    with patch(f"{FILE_PATH}.async_to_sync") as mock_sync:
+        upload_exported_apps()
 
     # verify that async_to_sync is never called
     mock_sync.assert_not_called()
-
-    # verify that logger.info is never called
-    mock_logger.info.assert_not_called()
 
 
 def test_signals_upload_exported_apps_tar_gz(test_database, test_device):

@@ -69,6 +69,15 @@ class FractalDatabaseController(AuthenticatedController):
 
     @use_django
     async def _sync_database_metadata(self, room_id: str, **kwargs) -> None:
+        """
+        Syncs the database and target fixtures from the room state of a given room_id.
+        Will also add the synced in target as a subspace to the primary target
+        of the current database.
+
+        Args:
+            room_id: The room ID to sync from.
+        """
+        # fetch the database and target fixtures from room state
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
             fixture = []
             res = await client.room_get_state_event(room_id, "f.database")
@@ -79,6 +88,9 @@ class FractalDatabaseController(AuthenticatedController):
                 database_pk = database_fixture["pk"]
             except Exception as e:
                 raise Exception(f"Failed to parse database fixture: {e}")
+
+            # clear devices from the database fixture since they will be loaded from _sync_data
+            database_fixture["fields"]["devices"] = []
             fixture.append(database_fixture)
 
             res = await client.room_get_state_event(room_id, "f.database.target")
@@ -94,6 +106,7 @@ class FractalDatabaseController(AuthenticatedController):
 
         from fractal_database.replication.tasks import replicate_fixture
 
+        # replicate the database and target fixtures into the database
         try:
             await replicate_fixture(json.dumps(fixture))
         except Exception as e:
@@ -135,29 +148,51 @@ class FractalDatabaseController(AuthenticatedController):
             await sync_to_async(_init_instance_database)()
             return None
 
-        target = await database.aprimary_target()
+        primary_target = await database.aprimary_target()
+        if not primary_target:
+            raise Exception(f"Failed to find primary target for database {database}")
+
         target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
             pk=added_target_pk
         )
+        # add target_to_add as a subspace to the primary target of the database
         repr_log = await sync_to_async(MatrixExistingSubSpace.create_representation_logs)(
-            target_to_add, target
+            instance=target_to_add, target=primary_target
         )
-
         await repr_log[0].apply()
 
-        # TODO: Handle publishing a users homeserver as a target for the
+        # TODO: Handle publishing a user's homeserver as a target for the
         # synced in database
 
         return None
 
     async def _sync_data(self, room_id: str) -> None:
+        """
+        Syncs all replication tasks from the epoch of a given room_id.
+
+        NOTE: Ensure before calling this function that the appropriate
+              MATRIX_ROOM_iD environment variable is set.
+
+        Args:
+            room_id: The room ID to sync from.
+        """
+        os.environ["MATRIX_ROOM_ID"] = room_id
+
         from fractal_database_matrix.broker import broker
 
+        # broker = broker.with_matrix_config(
+        #     room_id=room_id,
+        #     homeserver_url=os.environ.get("MATRIX_HOMESERVER_URL"), # type: ignore
+        #     access_token=os.environ.get("MATRIX_ACCESS_TOKEN"), # type: ignore
+        # )
         # FIXME: create_filter should be moved onto the FractalAsyncClient
         from taskiq_matrix.filters import create_room_message_filter
 
+        # intialize a matrix broker in order to sync tasks.
         broker._init_queues()
 
+        # set the replication queue's checkpoint to None so that we can sync
+        # from the beginning of the room
         broker.replication_queue.checkpoint.since_token = None
         # dont need results for syncing tasks
         broker.result_backend = DummyResultBackend()  # type: ignore
@@ -185,11 +220,11 @@ class FractalDatabaseController(AuthenticatedController):
                 if not merged_task:
                     merged_task = task
 
-                data = json.loads(task.data["args"][0])
+                data = json.loads(task.data["args"][0])  # type: ignore
                 for item in data:
                     fixture.append(item)
 
-            merged_task.data["args"][0] = json.dumps(fixture)
+            merged_task.data["args"][0] = json.dumps(fixture)  # type:ignore
 
             # keep syncing until we get no more tasks
             print(f"Got {len(tasks)} tasks")
@@ -435,10 +470,6 @@ class FractalDatabaseController(AuthenticatedController):
         Args:
             project_name: The name of the project to shell into.
         """
-        # sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
-        # os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
-        # django.setup()
-
         # os.chdir(project_name)
         # TODO customize prompt based on current context
         # TODO autoload models
@@ -582,6 +613,9 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
             subprocess.run(
                 ["git", "clone", f"{GIT_ORG_PATH}/fractal-matrix-client.git"], cwd=source_dir
             )
+            subprocess.run(
+                ["git", "clone", f"{GIT_ORG_PATH}/fractal-gateway-v2.git"], cwd=source_dir
+            )
         except Exception as e:
             print(f"Failed to clone Fractal Database projects: {e}")
             return False
@@ -610,15 +644,17 @@ COPY fractal-database/ /fractal/fractal-database/
 COPY taskiq-matrix/ /fractal/taskiq-matrix/
 COPY fractal-matrix-client/ /fractal/fractal-matrix-client/
 COPY fractal-cli/ /fractal/fractal-cli/
+COPY fractal-gateway-v2/ /fractal/fractal-gateway-v2/
 RUN pip install /fractal/fractal-cli/
 RUN pip install /fractal/fractal-matrix-client/
 RUN pip install /fractal/taskiq-matrix/
 RUN pip install /fractal/fractal-database-matrix/
 RUN pip install /fractal/fractal-database/
+RUN pip install /fractal/fractal-gateway-v2/
 """
         try:
             client = docker.from_env()
-        except:
+        except Exception:
             print("Failed to connect to Docker daemon.")
             print("Is Docker installed and running?")
             exit(1)
@@ -662,7 +698,7 @@ RUN pip install /fractal/fractal-database/
 
     def _build(self, name: str, verbose: bool = False) -> str:
         """
-        Builds a given database into a Docker container and exports it as a tarball.
+        Builds a given Fractal Database app into a Docker container.
 
         ---
         Args:
@@ -842,9 +878,6 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
         except Exception as e:
             print(f"Failed to download {http_url}: {e}")
             exit(1)
-        import pdb
-
-        pdb.set_trace()
 
     @auth_required
     @cli_method
@@ -881,6 +914,9 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
             room_id: The room ID to sync from.
         """
         os.environ["MATRIX_ROOM_ID"] = room_id
+
+        # we must important the replicate_fixture task here so that the broker
+        # is aware of it when we start syncing tasks
         from fractal_database.replication.tasks import replicate_fixture
 
         asyncio.run(self._sync_data(room_id))
@@ -902,12 +938,17 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
         if not databases:
             print("No Databases found. Get started by doing")
             print("fractal init")
+
         for database in databases:
             primary_target = database.primary_target()
             if isinstance(primary_target, MatrixReplicationTarget):
                 room_id: str = primary_target.metadata.get("room_id")
-                if room_id:
-                    asyncio.run(self._sync_database_metadata(room_id))
+                if not room_id:
+                    print(
+                        f"Failed to find room_id for database {database.name} primary target: {primary_target}"
+                    )
+                    continue
+                asyncio.run(self._sync_database_metadata(room_id))
 
     @use_django
     @cli_method

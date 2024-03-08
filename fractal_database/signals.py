@@ -15,8 +15,7 @@ from fractal.matrix import MatrixClient
 from fractal_database.utils import get_project_name, init_poetry_project
 from taskiq_matrix.lock import MatrixLock
 
-logger = logging.getLogger("django")
-# logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _thread_locals = threading.local()
 
@@ -67,11 +66,11 @@ def commit(target: "ReplicationTarget") -> None:
     # this runs its own thread so once this completes, we need to clear the deferred replications
     # for this target
     try:
-        logger.debug("Inside signals: commit")
+        logger.info("Transaction complete, calling %s.replicate()" % target)
         try:
             async_to_sync(target.replicate)()
         except Exception as e:
-            logger.error(f"Error replicating {target}: {e}")
+            logger.error("Error replicating %s: %s" % (target, e))
     finally:
         clear_deferred_replications(target.name)
 
@@ -88,12 +87,12 @@ def defer_replication(target: "ReplicationTarget") -> None:
     if not transaction.get_connection().in_atomic_block:
         raise Exception("Replication can only be deferred inside an atomic block")
 
-    logger.info(f"Deferring replication of {target}")
+    logger.debug("Deferring replication of target %s" % target.name)
     if not hasattr(_thread_locals, "defered_replications"):
         _thread_locals.defered_replications = {}
     # only register an on_commit replicate once per target
     if target.name not in _thread_locals.defered_replications:
-        logger.info(f"Registering on_commit for {target.name}")
+        logger.debug("Registering transaction.on_commit for target %s" % target.name)
         transaction.on_commit(lambda: commit(target))
     _thread_locals.defered_replications.setdefault(target.name, []).append(target)
 
@@ -112,7 +111,7 @@ def clear_deferred_replications(target: str) -> None:
     Args:
         target (str): The target to clear deferred replications for.
     """
-    logger.info("Clearing deferred replications for target %s" % target)
+    logger.debug("Clearing deferred replications for target %s" % target)
     del _thread_locals.defered_replications[target]
 
 
@@ -132,7 +131,7 @@ def register_device_account(
     if not created or raw:
         return None
 
-    logger.info("Registering device account for %s" % instance.name)
+    logger.info("Registering device account for device %s" % instance.name)
 
     async def _register_device_account() -> tuple[str, str, str]:
         from fractal.matrix import MatrixClient
@@ -193,16 +192,15 @@ def object_post_save(
     """
     Schedule replication for a ReplicatedModel instance
     """
-    logger.debug("In post save")
+    logger.debug("object_post_save called for %s" % instance)
     if raw:
-        logger.info(f"Loading instance from fixture: {instance}")
+        logger.info("Loading instance from fixture: %s" % instance)
         return None
 
     if not transaction.get_connection().in_atomic_block:
         with transaction.atomic():
+            logger.info("Creating a new transaction to prepare for replication of %s" % instance)
             return object_post_save(sender, instance, created, raw, **kwargs)
-
-    logger.debug("in atomic block")
 
     # TODO: Make this a context manager so we dont ever have to worry about forgetting to exit
     enter_signal_handler()
@@ -211,17 +209,44 @@ def object_post_save(
 
     try:
         if in_nested_signal_handler():
-            logger.info(f"Back inside post_save for instance: {instance}")
+            logger.debug(
+                "In nested object_post_save signal for %s. Not calling schedule replication."
+                % instance
+            )
             return None
 
-        logger.info(f"Outermost post save instance: {instance}")
-
         # create replication log entry for this instance
-        logger.info(f"Calling schedule replication on {instance}")
+        logger.debug("Calling schedule replication on %s" % instance)
         instance.schedule_replication(created=created)
 
     finally:
         exit_signal_handler()
+
+
+def create_related_instance_configs(
+    instance: "ReplicatedModel",
+    related_instance: "ReplicatedModel",
+    targets: list["MatrixReplicationTarget"],
+):
+    from fractal_database.models import ReplicatedInstanceConfig
+
+    # ensure that the instance is replicated to all targets
+    # that the related object is replicated to
+    for target in targets:
+        try:
+            target.instances.get(instance=related_instance)
+            logger.debug(
+                "ReplicatedInstanceConfig for %s on target %s already exists"
+                % (related_instance, target)
+            )
+            continue
+        except ReplicatedInstanceConfig.DoesNotExist:
+            pass
+        logger.info("Creating ReplicatedInstanceConfig for %s on target %s" % (instance, target))
+        config = ReplicatedInstanceConfig.objects.create(
+            instance=instance,
+        )
+        target.instances.add(config)
 
 
 def schedule_replication_on_m2m_change(
@@ -238,6 +263,7 @@ def schedule_replication_on_m2m_change(
 
     Connected via fractal_database.apps.FractalDatabaseConfig.ready
     """
+
     # ensure that the signal is called in a transaction
     if not transaction.get_connection().in_atomic_block:
         with transaction.atomic():
@@ -248,15 +274,21 @@ def schedule_replication_on_m2m_change(
     if action not in {"post_add", "post_remove"}:
         return None
 
-    logger.debug(f"Inside schedule_replication_on_m2m_change: {instance}")
+    logger.info("Inside schedule_replication_on_m2m_change for %s" % instance)
     for id in pk_set:
-        if reverse:
-            related_instance = model.objects.get(pk=id)
-            instance.schedule_replication(created=False)
-            related_instance.schedule_replication(created=False)
-        else:
-            related_instance = instance
-            related_instance.schedule_replication(created=False)
+        # fetch the related instance so that we can ensure ReplicatedInstanceConfigs
+        # are created for all targets that the related instance is replicated to
+        related_instance = model.objects.get(pk=id)
+        targets = related_instance.replication_targets()
+        create_related_instance_configs(instance, related_instance, targets)
+
+        # now that we've ensured that all of the ReplicatedInstanceConfigs for the related instance
+        # have been created, we can schedule replication for the instance.
+        # FIXME: this may be causing a duplicate fixture to be sent into the related_instance's room
+        # we may only need to call schedule_replication on instance here.
+        related_instance.schedule_replication(created=False)
+        instance.schedule_replication(created=False)
+
 
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
@@ -275,10 +307,16 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
 
     if not transaction.get_connection().in_atomic_block:
         with transaction.atomic():
+            logger.info(
+                "Creating a transaction in order to create database and matrix replication target"
+            )
             return create_database_and_matrix_replication_target(*args, **kwargs)
 
     project_name = get_project_name()
     logger.info('Creating Fractal Database for Django project "%s"' % project_name)
+    logger.info(
+        "Schedule replcation is expected to fail here as the database has not been configured as the current database yet"
+    )
 
     database, _ = Database.objects.get_or_create(
         name=project_name,
@@ -289,6 +327,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         },
     )
 
+    logger.info("Configuring database %s as the current database" % database)
     # TODO: This needs to also happen in an instance db. Move this to another signal?
     current_db_config, _ = DatabaseConfig.objects.get_or_create(
         current_db=database,
@@ -296,8 +335,10 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
             "current_db": database,
         },
     )
+
     # create a dummy replication target if none exists so we can replicate when a real target is added
     if not database.get_all_replication_targets():
+        logger.info("Creating DummyReplicationTarget for database %s" % database)
         DummyReplicationTarget.objects.create(
             name="dummy",
             database=database,
@@ -312,7 +353,10 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
             "You must be logged in to replicate to Matrix. Not creating Matrix Replication target."
         )
         return
-    logger.info("Creating MatrixReplicationTarget for database %s" % database)
+
+    logger.info(
+        "Ensuring primary MatrixReplicationTarget for current database %s is created" % database
+    )
     target, created = MatrixReplicationTarget.objects.get_or_create(
         name="matrix",
         database=database,
@@ -325,7 +369,8 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
     )
 
     device_name = f"{socket.gethostname()}_{token_hex(4)}".lower()
-    device, created = Device.objects.get_or_create(
+    logger.info("Ensuring this physical device (%s) is created" % socket.gethostname())
+    device, device_created = Device.objects.get_or_create(
         name=device_name,
         owner_matrix_id=owner_matrix_id,
         display_name=device_name,
@@ -335,12 +380,12 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
             "display_name": device_name,
         },
     )
+    logger.info("Setting current device in DatabaseConfig to this physical device: %s" % device)
     current_db_config.update(current_device=device)
-    database.devices.add(device)
 
-    # replicate the database now that we have a replication target
-    logger.debug("Replicating after adding device to database")
-    database.save()
+    if device_created:
+        logger.info("Adding current device (%s) to database %s" % (device, database))
+        database.devices.add(device)
 
 
 async def _accept_invite(
@@ -391,6 +436,10 @@ def join_device_to_database(
         pk_set: List of device primary keys
     """
     from fractal_database.models import Device
+    from fractal_database_matrix.models import (
+        MatrixCredentials,
+        MatrixReplicationTarget,
+    )
 
     if kwargs["action"] != "post_add":
         return None
@@ -401,13 +450,38 @@ def join_device_to_database(
         # dont send an invite if the device is the current device
         # since the current device is invited in create_representation
         if device_id == current_device.pk:
-            logger.debug("Not sending invite to current device in database...")
+            logger.debug(
+                "Not sending invite to current device (%s) in database..." % current_device
+            )
             continue
 
         device = Device.objects.get(pk=device_id)
         primary_target = instance.primary_target()
+        if not primary_target:
+            logger.warning(
+                "No primary target found for database %s. Skipping invite for device %s"
+                % (instance, device)
+            )
+            continue
+        elif not isinstance(primary_target, MatrixReplicationTarget):
+            logger.warning(
+                "Primary target is not a MatrixReplicationTarget. Skipping invite for device %s"
+                % device
+            )
+            continue
 
-        device_creds = primary_target.matrixcredentials_set.get(device=device)  # type:ignore
+        # attempt to fetch the device's matrix credentials for the
+        try:
+            device_creds = MatrixCredentials.objects.filter(
+                device=device, targets__homeserver=primary_target.homeserver
+            ).first()
+        except MatrixCredentials.DoesNotExist:
+            # likely syncing in another user's device so we don't need to send an invite.
+            logger.warning(
+                "No MatrixCredentials found for device %s on primary target %s. Skipping invite"
+                % (device, primary_target)
+            )
+            continue
 
         async_to_sync(_invite_device)(
             device_creds,
@@ -472,13 +546,19 @@ def update_target_state(
     # only update the state if the object is the primary target
     if isinstance(instance, MatrixReplicationTarget) and not instance.primary:
         return None
-    logger.info("Updating target state for %s" % instance)
+
+    logger.debug("Updating target state for %s" % instance)
 
     if isinstance(instance, Database):
         target = instance.primary_target()
-        if not target or not isinstance(target, MatrixReplicationTarget):
+        if not target:
             logger.warning(
                 "Cannot update target state, no primary target found for database %s" % instance
+            )
+            return None
+        elif not isinstance(target, MatrixReplicationTarget):
+            logger.warning(
+                "Cannot update target state, primary target is not a MatrixReplicationTarget"
             )
             return None
     else:
@@ -486,12 +566,15 @@ def update_target_state(
 
     room_id = target.metadata.get("room_id")
     if not room_id:
-        logger.warning("Cannot update target state, no room_id found for target %s" % target)
+        logger.warning(
+            "Cannot update target state, target %s does not have a room_id in its metadata. This may be because the target hasn't created its representation in Matrix yet."
+            % target
+        )
         return None
 
     instance_fixture = instance.to_fixture(json=True)
     representation_module = target.get_representation_module()
-    logger.info("Got representation module: %s" % representation_module)
+    logger.debug("Got representation module: %s" % representation_module)
     repr_instance = RepresentationLog._get_repr_instance(representation_module)
     state_type = "f.database" if isinstance(instance, Database) else "f.database.target"
     # put state needs the matrix credentials for the target so accessing the creds here
@@ -517,6 +600,7 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
     app_path = sender.path
     app_name = sender.name
 
+    logger.info("Creating a tarball for Django app %s" % app_name)
     # ensure export directory exists
     os.makedirs(FRACTAL_EXPORT_DIR, exist_ok=True)
 
@@ -543,7 +627,7 @@ def zip_django_app(sender: AppConfig, *args, **kwargs) -> None:
                 tarinfo.size = len(pyproject_file.getvalue())
                 tar.addfile(tarinfo=tarinfo, fileobj=pyproject_file)
 
-    logger.info("Created tarball of %s" % app_name)
+    logger.info("Successfully created tarball of %s" % app_name)
 
 
 async def _upload_app(
@@ -573,7 +657,7 @@ async def _upload_app(
         await _lock_and_put_state(
             repr_instance, room_id, primary_target, state_type, {"mxc": mxc_uri}
         )
-        logger.info("Uploaded %s to %s" % (app, primary_target.homeserver))
+        logger.info("Successfully uploaded app %s to %s" % (app, primary_target.homeserver))
 
 
 def upload_exported_apps(*args, **kwargs) -> None:
@@ -584,7 +668,7 @@ def upload_exported_apps(*args, **kwargs) -> None:
     try:
         apps = os.listdir(FRACTAL_EXPORT_DIR)
     except FileNotFoundError:
-        logger.info("No apps found in export directory. Skipping upload")
+        logger.debug("No apps found in export directory. Skipping upload")
         return None
 
     from fractal_database.models import Database, RepresentationLog
@@ -593,13 +677,21 @@ def upload_exported_apps(*args, **kwargs) -> None:
     try:
         database = Database.current_db()
     except Database.DoesNotExist:
-        logger.warning("No current database found, skipping app upload")
+        logger.debug("No current database found, skipping app upload")
         return None
 
     primary_target = database.primary_target()
-    if not primary_target or not isinstance(primary_target, MatrixReplicationTarget):
-        logger.warning("No primary target found, skipping app upload")
+    if not primary_target:
+        logger.debug("No primary target found, skipping app upload")
         return None
+    elif not isinstance(primary_target, MatrixReplicationTarget):
+        logger.debug("Primary target is not a MatrixReplicationTarget, skipping app upload")
+        return None
+
+    logger.info(
+        "Uploading exported apps to current database's primary target homeserver: %s"
+        % primary_target.homeserver
+    )
 
     representation_module = primary_target.get_representation_module()
     repr_instance = RepresentationLog._get_repr_instance(representation_module)
@@ -620,11 +712,34 @@ def upload_exported_apps(*args, **kwargs) -> None:
 def initialize_fractal_app_catalog(*args, **kwargs):  # pragma:no cover
     from fractal_database.models import AppCatalog
 
-    logger.info("Initializing fractal app catalog")
-    AppCatalog.objects.get_or_create(
+    logger.info("Ensuring Fractal App Catalog is created")
+    catalog, created = AppCatalog.objects.get_or_create(
         name="fractal",
         defaults={
             "name": "fractal",
             "git_url": "https://github.com/fractalnetworksco/FIXME",
         },
     )
+    if created:
+        logger.debug("Created Fractal App Catalog %s" % catalog)
+        return
+    logger.debug("Fractal App Catalog already exists")
+
+
+# def replicate_related_objects(
+#     sender: "ReplicatedModel",
+#     instance: "ReplicatedModel",
+#     action: str,
+#     reverse: bool,
+#     model: "ReplicatedModel",
+#     pk_set: list[Any],
+#     **kwargs,
+# ) -> None:
+#     """"""
+#     if action not in {"post_add", "post_remove"}:
+#         return None
+
+#     logger.info(f"Inside replicate_related_objects: {instance}")
+#     import pdb
+
+#     pdb.set_trace()

@@ -27,8 +27,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-# to get console output from logger:
-# logger = logging.getLogger("django")
 
 
 class BaseModel(models.Model):
@@ -109,7 +107,7 @@ class RepresentationLog(BaseModel):
         model: models.Model = self.content_type.model_class()  # type: ignore
         instance = await model.objects.aget(pk=self.object_id)
         repr_instance = self._get_repr_instance(self.method)
-        logger.info("Calling create_representation method on: ", repr_instance)
+        logger.debug("Calling create_representation method on: %s" % repr_instance)
         metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
         if metadata:
             await instance.store_metadata(metadata)  # type: ignore
@@ -165,7 +163,7 @@ class ReplicatedModel(BaseModel):
         from fractal_database.signals import object_post_save, update_target_state
 
         for model_class in cls.models:
-            logger.info(
+            logger.debug(
                 'Registering replication signals for model "{}"'.format(model_class.__name__)
             )
             # pre save signal to automatically set the database property on all ReplicatedModels
@@ -180,15 +178,16 @@ class ReplicatedModel(BaseModel):
             with transaction.atomic():
                 return self.schedule_replication(created=created)
 
-        logger.debug(f"Inside ReplicatedModel.schedule_replication() for {self}")
+        logger.info("Scheduling replication for %s" % self)
         if not database:
             try:
                 database = Database.current_db()
             except Database.DoesNotExist as e:
-                logger.error("Unable to get current database from schedule_replication")
+                logger.error(
+                    "Cannot schedule replication for %s. Current database is not set." % self
+                )
                 return
 
-        # TODO replication targets to implement their own serialization strategy
         targets = database.get_all_replication_targets()  # type: ignore
         targets.extend(self.replication_targets())
         if isinstance(self, ReplicationTarget) and self not in targets:
@@ -200,12 +199,16 @@ class ReplicatedModel(BaseModel):
                 # only allow targets to create representations for themselves,
                 # targets should not create representations for other targets
                 if isinstance(self, ReplicationTarget) and self == target:
+                    logger.info("Target %s is creating representation logs for itself" % target)
                     repr_logs = target.create_representation_logs(self)
             else:
-                logger.info("Not creating repr for object: ", self)
+                logger.debug("Not creating repr for object: %s" % self)
 
-            logger.info(f"Creating replication log for target {target}")
+            logger.info(
+                "Creating ReplicationLog for ReplicatedModel (%s) on target %s" % (self, target)
+            )
             repl_log = ReplicationLog.objects.create(
+                # TODO replication targets should implement their own serialization strategy
                 payload=self.to_fixture(),
                 target=target,
                 instance=self,
@@ -214,7 +217,7 @@ class ReplicatedModel(BaseModel):
 
             # dummy targets return none
             if repr_logs:
-                logger.info("Adding repr logs to repl log")
+                logger.debug("Adding repr logs %s to repl log %s" % (repr_logs, repl_log))
                 repl_log.repr_logs.add(*repr_logs)
 
             defer_replication(target)
@@ -284,31 +287,12 @@ class ReplicatedInstanceConfig(ReplicatedModel):
 
 
 class ReplicationTarget(ReplicatedModel):
-    """
-    Why replicate ReplicationTargets?
-
-    In our original design ReplicationTargets were not ReplicatedModels
-    we decided to make them ReplicatedModels because we thought it would make things easier for end users.
-
-    For example, in a private context you may want to configure all of your devices to start replicating to
-    another target.
-
-    In a public context users may want to contribute to the resilience of a dataset by publishing their
-    homeserver as a replication target.
-
-    In general, because ReplicationTargets store the necessary context needed to sync and replicate data
-    from/to remote datastores, replicating them allows new devices to contribute to the replication
-    swarm.
-
-    In the future, perhaps replicating the same dataset to different Matrix rooms (as oppose to relying
-    solely on Matrix's federation) would lend itself to a more scalable decentralized replication model.
-    """
-
     name = models.CharField(max_length=255)
     enabled = models.BooleanField(default=True)
     database = models.ForeignKey(
         "fractal_database.Database", on_delete=models.CASCADE, null=True, blank=True
     )
+    filter = models.CharField(max_length=255, null=True, blank=True)
     # replication events are only consumed from the primary target for a database
     primary = models.BooleanField(default=False)
     # metadata is a map of properties that are specific to the target
@@ -391,18 +375,18 @@ class ReplicationTarget(ReplicatedModel):
                     .order_by("date_created")
                 ):
                     try:
-                        logger.info("Calling apply for repr log: ", repr_log)
+                        logger.debug("Calling apply for repr log: %s" % repr_log)
                         await repr_log.apply()
                         # after applying a representation for this target,
                         # we need to refresh ourself to get any latest metadata
                         # if repr_log.content_type.model_class() == self.__class__:
-                        logger.info(f"Refreshing {self} after applying representation")
+                        logger.debug("Refreshing %s after applying representation" % self)
                         await self.arefresh_from_db()
                         # call replicate again since apply will create new
                         # replication logs
                         return await self.replicate()
                     except Exception as e:
-                        logger.error(f"Error applying representation log: {e}")
+                        logger.error("Error applying representation log: %s" % e)
                         continue
                 fixture.append(log.payload[0])
 
@@ -411,13 +395,14 @@ class ReplicationTarget(ReplicatedModel):
                 # bulk update all of the logs in the queryset to deleted
                 await queryset.aupdate(deleted=True)
             except Exception as e:
-                logger.error(f"Error pushing replication log: {e}")
+                logger.error("Error pushing replication log: %s" % e)
 
     async def store_metadata(self, metadata: dict) -> None:
         """
         Store the metadata on target.
         """
         self.metadata.update(metadata)
+        logger.info("%s is calling save() after adding representation metadata" % self)
         await self.asave()
 
     def create_representation_logs(self, instance: "ReplicatedModel"):
@@ -425,12 +410,16 @@ class ReplicationTarget(ReplicatedModel):
         Create the representation logs (tasks) for creating a Matrix space
         """
         repr_logs = []
+        # get the representation module specified by the provided instance
         repr_module = instance.get_representation_module()
         if not repr_module:
+            # provided instance doesn't specify a representation module
             return []
+
+        # create an instance of the representation module
         repr_type = RepresentationLog._get_repr_instance(repr_module)
 
-        logger.info(f"Creating repr {repr_type} logs for instance {instance} on target {self}")
+        # call the create_representation_logs method on representation instance
         repr_logs.extend(repr_type.create_representation_logs(instance, self))
         return repr_logs
 
@@ -477,7 +466,7 @@ class Database(ReplicatedModel):
     is_root = models.BooleanField(default=False)
 
     def __str__(self) -> str:
-        return self.name
+        return f"{self.name} (Database)"
 
     def primary_target(self) -> Optional[ReplicationTarget]:
         """
@@ -544,8 +533,15 @@ class AppCatalog(ReplicatedModel):
     checksum = models.CharField(max_length=255)
     public = models.BooleanField(default=True)
 
+    def __str__(self):
+        return f"{self.name} (AppCatalog)"
+
     async def store_metadata(self, metadata: dict) -> None:
         self.app_ids.append(metadata["room_id"])
+        logger.info(
+            "App Catalog %s is calling save() after adding app_id %s"
+            % (self, metadata["room_id"])
+        )
         await self.asave()
 
     def clean(self):
@@ -581,7 +577,7 @@ class Device(ReplicatedModel):
     owner_matrix_id = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self) -> str:
-        return self.name
+        return f"{self.name} (Device)"
 
     @classmethod
     def current_device(cls) -> "Device":
@@ -614,3 +610,39 @@ class Snapshot(ReplicatedModel):
 
     url = models.URLField()
     sync_token = models.CharField(max_length=255)
+
+
+class Service(ReplicatedModel):
+    name = models.CharField(max_length=255)
+    # device that the service is running on
+    device = models.ForeignKey(Device, on_delete=models.CASCADE)
+    # database (group) that the service belongs to
+    database = models.ForeignKey(Database, on_delete=models.CASCADE)
+
+    class Meta:
+        abstract = True
+
+
+"""
+TODO: Incorporate the new DDjango models
+"""
+# class Channel(ReplicatedModel):
+#     """
+#     Primitve for replicating data.
+#     """
+
+#     # filter for data this channel should replicate
+#     filter = models.CharField(max_length=255, null=True, blank=True)
+
+
+# class LocalChannel(Channel):
+#     """
+#     Local channel. This is a channel that can be used to maintain a local copy of data.
+#     Data IS NOT replicated using this channel.
+#     """
+
+#     async def replicate(*args, **kwargs):
+#         pass
+
+#     def create_representation_logs(self, instance):
+#         pass
