@@ -44,6 +44,7 @@ def use_django(func: Callable[..., Any]):
             django.setup()
         except Exception as e:
             logger.error(f"Error setting up Django: {e}")
+            raise e
 
         kwargs["project_name"] = project_name
         res = func(*args, **kwargs)
