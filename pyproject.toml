@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fractal-database"
-version = "0.0.9"
+version = "0.0.10"
 description = ""
 authors = ["Mo Balaa <balaa@fractalnetworks.co>"]
 readme = "README.md"
