@@ -9,9 +9,8 @@ from fractal_database.signals import FRACTAL_EXPORT_DIR
 
 import pytest
 from fractal.cli.controllers.auth import AuthController
-from fractal_database.models import Database, Device, DummyReplicationTarget
-from fractal_database.signals import clear_deferred_replications
-from fractal_database_matrix.models import MatrixCredentials, MatrixReplicationTarget
+from fractal.cli.utils import data_dir
+from fractal_database.models import Database, Device  # MatrixCredentials
 from nio import AsyncClient
 
 try:
@@ -56,7 +55,7 @@ def logged_in_db_auth_controller(test_homeserver_url, test_matrix_id):
 
 
 @pytest.fixture(scope="function")
-def test_database(db):
+def test_database(db, logged_in_db_auth_controller):
     """ """
 
     from fractal_database.signals import create_database_and_matrix_replication_target
@@ -101,3 +100,19 @@ def cleanup():
         shutil.rmtree(FRACTAL_EXPORT_DIR)
     except FileNotFoundError:
         pass
+
+    try:
+        shutil.rmtree(data_dir)
+    except FileNotFoundError:
+        pass
+
+@pytest.fixture(scope='function')
+def test_yaml_dict():
+    yaml_info = {
+        "test_project": "test_project",
+        'TEST_DATABASE': str(uuid4()),
+        'ANOTHER_DATABASE': str(uuid4()),
+        'YET_ANOTHER_DATABASE': str(uuid4()),
+    }
+
+    return yaml_info
