@@ -9,7 +9,7 @@ from fractal_database.signals import FRACTAL_EXPORT_DIR
 
 import pytest
 from fractal.cli.controllers.auth import AuthController
-from fractal.cli.utils import data_dir
+from fractal.cli.utils import data_dir, write_user_data
 from fractal_database.models import Database, Device  # MatrixCredentials
 from nio import AsyncClient
 
@@ -116,3 +116,16 @@ def test_yaml_dict():
     }
 
     return yaml_info
+
+@pytest.fixture(scope='function')
+def _use_django(test_database, test_yaml_dict):
+    """
+    """
+
+    # create the projects.yaml file
+    write_user_data(test_yaml_dict, "projects.yaml")
+
+    # verify that the file exists in the data directory
+    assert os.path.exists(os.path.join(data_dir, "projects.yaml"))
+
+    os.environ['FRACTAL_PROJECT_NAME'] = test_yaml_dict['test_project']
