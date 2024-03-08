@@ -276,30 +276,19 @@ def schedule_replication_on_m2m_change(
 
     logger.info("Inside schedule_replication_on_m2m_change for %s" % instance)
     for id in pk_set:
-        if reverse:
-            # fetch the related instance so that we can ensure ReplicatedInstanceConfigs
-            # are created for all targets that the related instance is replicated to
-            related_instance = model.objects.get(pk=id)
-            targets = related_instance.replication_targets()
-            create_related_instance_configs(instance, related_instance, targets)
+        # fetch the related instance so that we can ensure ReplicatedInstanceConfigs
+        # are created for all targets that the related instance is replicated to
+        related_instance = model.objects.get(pk=id)
+        targets = related_instance.replication_targets()
+        create_related_instance_configs(instance, related_instance, targets)
 
-            # now that we have created the ReplicatedInstanceConfigs for the related instance,
-            # we can schedule replication for the instance
-            instance.schedule_replication(created=False)
-            related_instance.schedule_replication(created=False)
-        else:
-            # fetch the related instance so that we can ensure ReplicatedInstanceConfigs
-            # are created for all targets that the related instance is replicated to
-            related_instance = model.objects.get(pk=id)
-            targets = related_instance.replication_targets()
-            create_related_instance_configs(instance, related_instance, targets)
+        # now that we've ensured that all of the ReplicatedInstanceConfigs for the related instance
+        # have been created, we can schedule replication for the instance.
+        # FIXME: this may be causing a duplicate fixture to be sent into the related_instance's room
+        # we may only need to call schedule_replication on instance here.
+        related_instance.schedule_replication(created=False)
+        instance.schedule_replication(created=False)
 
-            # now that we've ensured that all of the ReplicatedInstanceConfigs for the related instance
-            # have been created, we can schedule replication for the instance.
-            # FIXME: this may be causing a duplicate fixture to be sent into the related_instance's room
-            # we may only need to call schedule_replication on instance here.
-            related_instance.schedule_replication(created=False)
-            instance.schedule_replication(created=False)
 
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
