@@ -1,6 +1,7 @@
 import secrets
 from unittest.mock import patch
 
+from django.conf import settings
 from fractal_database.utils import get_project_name
 
 FILE_PATH = "fractal_database.utils"
@@ -13,18 +14,17 @@ def test_get_project_attribute_error():
 
     # patch the settings in the utils file
     with patch(f"{FILE_PATH}.settings", side_effect=AttributeError) as mock_settings:
-        # patch the logger
-        with patch(f"{FILE_PATH}.logger") as mock_logger:
+        mock_settings.BASE_DIR = secrets.token_hex(8)
+        # patch the os.path.basename function
+        with patch(f"{FILE_PATH}.os.path.basename") as mock_basename:
             # delete the project name attribute of the settings object
             delattr(mock_settings, "PROJECT_NAME")
 
             # call get_project_name
             proj = get_project_name()
 
-    # verify that logger.warning was called
-    mock_logger.warning.assert_called_with(
-        "settings.PROJECT_NAME is not set. Defaulting to settings.BASE_DIR"
-    )
+    # verify that os.path.basename was called
+    mock_basename.assert_called_with(mock_settings.BASE_DIR)
 
 
 def test_get_project_no_error():
@@ -40,12 +40,12 @@ def test_get_project_no_error():
         # set the generated name as the proejct name in the settings object
         mock_settings.PROJECT_NAME = expected_name
 
-        # patch the logger
-        with patch(f"{FILE_PATH}.logger") as mock_logger:
+        # patch os.path.basename
+        with patch(f"{FILE_PATH}.os.path.basename") as mock_basename:
             proj = get_project_name()
 
     # verify that the project name that is returned matches the expected name
     assert proj == expected_name
 
-    # verify that logger.warning was not called
-    mock_logger.warning.assert_not_called()
+    # verify that os.path.basename was not called
+    mock_basename.assert_not_called()
