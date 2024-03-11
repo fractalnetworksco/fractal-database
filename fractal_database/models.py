@@ -107,7 +107,7 @@ class RepresentationLog(BaseModel):
         model: models.Model = self.content_type.model_class()  # type: ignore
         instance = await model.objects.aget(pk=self.object_id)
         repr_instance = self._get_repr_instance(self.method)
-        logger.debug("Calling create_representation method on: %s" % repr_instance)
+        logger.info("Calling %s.create_representation()" % repr_instance.__class__.__name__)
         metadata = await repr_instance.create_representation(self, self.target_id)  # type: ignore
         if metadata:
             await instance.store_metadata(metadata)  # type: ignore
