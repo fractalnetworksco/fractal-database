@@ -386,7 +386,10 @@ class ReplicationTarget(ReplicatedModel):
                         # replication logs
                         return await self.replicate()
                     except Exception as e:
-                        logger.error("Error applying representation log: %s" % e)
+                        logger.exception(
+                            "Error applying representation log for target %s: %s"
+                            % (repr_log.target_type, e)
+                        )
                         continue
                 fixture.append(log.payload[0])
 
@@ -395,7 +398,7 @@ class ReplicationTarget(ReplicatedModel):
                 # bulk update all of the logs in the queryset to deleted
                 await queryset.aupdate(deleted=True)
             except Exception as e:
-                logger.error("Error pushing replication log: %s" % e)
+                logger.exception("Error pushing replication log: %s" % e)
 
     async def store_metadata(self, metadata: dict) -> None:
         """
@@ -411,6 +414,7 @@ class ReplicationTarget(ReplicatedModel):
         """
         repr_logs = []
         # get the representation module specified by the provided instance
+        logger.info("Fetching representation module for %s" % instance)
         repr_module = instance.get_representation_module()
         if not repr_module:
             # provided instance doesn't specify a representation module
@@ -443,7 +447,9 @@ class ReplicationTarget(ReplicatedModel):
                 deleted=False,
                 target_id=self.pk,
                 target_type=self.get_content_type(),
-            ).order_by("date_created")
+            )
+            .order_by("date_created")
+            .select_related("target_type")
             async for txn_id in txn_ids
         ]
 

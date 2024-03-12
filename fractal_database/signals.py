@@ -70,7 +70,7 @@ def commit(target: "ReplicationTarget") -> None:
         try:
             async_to_sync(target.replicate)()
         except Exception as e:
-            logger.error("Error replicating %s: %s" % (target, e))
+            logger.exception("Error replicating %s: %s" % (target, e))
     finally:
         clear_deferred_replications(target.name)
 
@@ -288,7 +288,6 @@ def schedule_replication_on_m2m_change(
         # we may only need to call schedule_replication on instance here.
         related_instance.schedule_replication(created=False)
         instance.schedule_replication(created=False)
-
 
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
