@@ -120,8 +120,11 @@ class FractalDatabaseController(AuthenticatedController):
         from fractal_database_matrix.representations import MatrixExistingSubSpace
 
         try:
-            # get the parent database
+            print("Fetching current database...")
+            # get the current database
             database = await Database.acurrent_db()
+
+            print(f"Current database is: {database}")
 
             # if current database is the same as the one we are syncing, return
             # (dont want to create a representation for the same database)
@@ -155,7 +158,10 @@ class FractalDatabaseController(AuthenticatedController):
         target_to_add = await MatrixReplicationTarget.objects.select_related("database").aget(
             pk=added_target_pk
         )
-        # add target_to_add as a subspace to the primary target of the database
+
+        # FIXME: should only create these representation logs if the target_to_add
+        # is not already a subspace of the primary target. right now this will always
+        # add the target_to_add as a subspace even if it's already a subspace.
         repr_log = await sync_to_async(MatrixExistingSubSpace.create_representation_logs)(
             instance=target_to_add, target=primary_target
         )
@@ -180,11 +186,6 @@ class FractalDatabaseController(AuthenticatedController):
 
         from fractal_database_matrix.broker import broker
 
-        # broker = broker.with_matrix_config(
-        #     room_id=room_id,
-        #     homeserver_url=os.environ.get("MATRIX_HOMESERVER_URL"), # type: ignore
-        #     access_token=os.environ.get("MATRIX_ACCESS_TOKEN"), # type: ignore
-        # )
         # FIXME: create_filter should be moved onto the FractalAsyncClient
         from taskiq_matrix.filters import create_room_message_filter
 
@@ -526,6 +527,7 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
         """
         db_name = db_name.lower()
         print(f"Creating Fractal Database Django app for {db_name}...")
+
         try:
             os.mkdir(db_name)
         except FileExistsError:
@@ -543,30 +545,21 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
         init_poetry_project(db_name)
 
         from fractal_database.models import Database, Device
-        from fractal_database_matrix.models import (
-            MatrixCredentials,
-            MatrixReplicationTarget,
-        )
+        from fractal_database_matrix.models import MatrixReplicationTarget
 
         current_db = Database.current_db()
         current_db_target: MatrixReplicationTarget = current_db.primary_target()  # type: ignore
+        current_device = Device.current_device()
+        device_creds = current_db_target.matrixcredentials_set.get(device=current_device)
 
         database = Database.objects.create(name=db_name)
         target = MatrixReplicationTarget.objects.create(
-            name="matrix",
+            name=db_name,
             database=database,
             homeserver=current_db_target.homeserver,
             primary=True,
         )
-        device, _ = Device.objects.get_or_create(
-            name=socket.gethostname(), defaults={"name": socket.gethostname()}
-        )
-        MatrixCredentials.objects.create(
-            matrix_id=current_db_target.matrixcredentials.matrix_id,
-            access_token=current_db_target.matrixcredentials.access_token,
-            target=target,
-            device=device,
-        )
+        target.matrixcredentials_set.add(device_creds)
         database.schedule_replication(created=True, database=database)
 
     def _verify_repos_cloned(self, source_dir: str = DEFAULT_FRACTAL_SRC_DIR):
@@ -578,6 +571,7 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
             "fractal-database",
             "taskiq-matrix",
             "fractal-matrix-client",
+            "fractal-gateway-v2",
         ]
         for project in projects:
             if not os.path.exists(os.path.join(source_dir, project)):
@@ -631,10 +625,11 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
             verbose: Whether or not to print verbose output.
         """
         original_dir = os.getcwd()
-        if not self._verify_repos_cloned():
+        source_dir = os.environ.get("FRACTAL_SOURCE_DIR", str(DEFAULT_FRACTAL_SRC_DIR))
+        if not self._verify_repos_cloned(source_dir=source_dir):
             self.clone()
 
-        os.chdir(os.environ.get("FRACTAL_SOURCE_DIR", str(DEFAULT_FRACTAL_SRC_DIR)))
+        os.chdir(source_dir)
 
         dockerfile = """
 FROM python:3.11.4
@@ -716,7 +711,7 @@ RUN pip install /fractal/fractal-gateway-v2/
 
         try:
             client = docker.from_env()
-        except:
+        except Exception:
             print("Failed to connect to Docker daemon.")
             print("Is Docker installed and running?")
             exit(1)
