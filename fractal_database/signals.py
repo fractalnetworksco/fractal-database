@@ -234,7 +234,7 @@ def create_related_instance_configs(
     # that the related object is replicated to
     for target in targets:
         try:
-            target.instances.get(instance=related_instance)
+            target.instances.get(id=related_instance.pk)
             logger.debug(
                 "ReplicatedInstanceConfig for %s on target %s already exists"
                 % (related_instance, target)

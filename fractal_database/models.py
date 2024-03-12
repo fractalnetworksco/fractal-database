@@ -285,6 +285,14 @@ class ReplicatedInstanceConfig(ReplicatedModel):
         null=True,
     )
 
+    def replication_targets(self) -> List["MatrixReplicationTarget"]:
+        """
+        ReplicatedInstanceConfigs replicated to wherever the instance (ReplicatedModel) is replicated.
+        """
+        instance_model: "ReplicatedModel" = self.content_type.model_class()  # type: ignore
+        instance = instance_model.objects.get(pk=self.object_id)
+        return instance.replication_targets()
+
 
 class ReplicationTarget(ReplicatedModel):
     name = models.CharField(max_length=255)
@@ -317,6 +325,33 @@ class ReplicationTarget(ReplicatedModel):
 
     def get_creds(self) -> Any:
         return None
+
+    def add_instance(self, instance: "ReplicatedModel") -> None:
+        """
+        Creates a ReplicatedInstanceConfig for the provided instance and
+        adds it to this target. This target will now replicate
+        ReplicationLogs for the provided instance.
+
+        Args:
+            instance: The instance to add to the target.
+        """
+        # avoid adding the same instance to the same target
+        # if the instance is already being replicated to the target
+        try:
+            self.instances.get(object_id=instance.pk)
+            raise Exception(f"ReplicatedModel {instance} is already being replicated to {self}")
+        except ReplicatedInstanceConfig.DoesNotExist:
+            pass
+
+        instance_config = ReplicatedInstanceConfig.objects.create(instance=instance)
+        self.instances.add(instance_config)
+
+        # schedule replication for the instance so that it is replicated to this target
+        instance.schedule_replication()
+
+    async def aadd_instance(self, instance: "ReplicatedModel") -> None:
+        """Async version of add_instance"""
+        return await sync_to_async(self.add_instance)(instance)
 
     def repr_metadata_props(self) -> Dict[str, str]:
         """
@@ -572,6 +607,9 @@ class App(ReplicatedModel):
     app_instance_id = models.CharField(max_length=255, unique=True)
     metadata = models.ForeignKey(AppCatalog, on_delete=models.DO_NOTHING)
     devices = models.ManyToManyField("fractal_database.Device")
+    database = models.ForeignKey(Database, on_delete=models.CASCADE)
+
+    # TODO: add current state in order to determine if the app is running or not
 
 
 class Device(ReplicatedModel):
