@@ -1,6 +1,6 @@
 import logging
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Self, Union
 from uuid import uuid4
 
 from asgiref.sync import sync_to_async
@@ -21,7 +21,7 @@ from .fields import SingletonField
 from .signals import defer_replication
 
 if TYPE_CHECKING:
-    from fractal_database.models import ReplicatedModel
+    from fractal_database.models import ReplicatedModel, ReplicationLog
     from fractal_database_matrix.models import (
         MatrixCredentials,
         MatrixReplicationTarget,
@@ -119,6 +119,7 @@ class ReplicatedModel(BaseModel):
     object_version = models.PositiveIntegerField(default=0)
     reprlog_set = GenericRelation("fractal_database.RepresentationLog")
     replication_configs = GenericRelation("fractal_database.ReplicatedInstanceConfig")
+    replication_logs = GenericRelation("fractal_database.ReplicationLog")
     models = []
 
     class Meta:
@@ -177,13 +178,61 @@ class ReplicatedModel(BaseModel):
         relationship_fields = []
         for field in self._meta.get_fields():
             if field.is_relation and isinstance(
-                field, (models.ForeignKey, models.ManyToManyField, models.OneToOneField)
+                field,
+                (
+                    models.ForeignKey,
+                    models.ManyToManyField,
+                    models.OneToOneField,
+                    GenericForeignKey,
+                ),
             ):
                 relationship_fields.append(field)
         return relationship_fields
 
+    def _create_related_replication_log(
+        self,
+        related_object: "ReplicatedModel",
+        target: "ReplicationTarget",
+        txn_id: str,
+        repr_logs: Optional[list[RepresentationLog]] = None,
+    ) -> Optional["ReplicationLog"]:
+        from fractal_database.models import ReplicationLog
+
+        # check if a replicationlog already exists for the related object at its current version
+        # (this avoids creating duplicate replication logs for the same related object on the target)
+        related_replication_log_exists = related_object.replication_logs.filter(
+            instance_version=related_object.object_version, target_id=target.pk
+        ).exists()
+        if related_replication_log_exists:
+            logger.info(
+                "ReplicationLog for related object %s already exists on target %s. Not creating duplicate"
+                % (related_object, target)
+            )
+            return None
+
+        # create new replication log for the related object and add any provided repr logs to it
+        logger.info(
+            "Creating ReplicationLog for related object %s on target %s"
+            % (related_object, target)
+        )
+
+        repl_log = ReplicationLog.objects.create(
+            payload=related_object.to_fixture(),
+            target=target,
+            instance=related_object,
+            txn_id=txn_id,
+            instance_version=related_object.object_version,
+        )
+        if repr_logs:
+            repl_log.repr_logs.add(*repr_logs)
+
+        return repl_log
+
     def _create_replication_logs(
-        self, target: "ReplicationTarget", txn_id: str, repr_logs: Optional[RepresentationLog]
+        self,
+        target: "ReplicationTarget",
+        txn_id: str,
+        repr_logs: Optional[list[RepresentationLog]] = None,
     ) -> None:
         """
         Introspects the current object to create replication logs for all related objects before
@@ -191,47 +240,55 @@ class ReplicatedModel(BaseModel):
         replicated before the current object. Necessary when the current object has relationships to
         other ReplicatedModels.
         """
-        # create replication logs for related objects
+        # first, create replication logs for related objects
         for field in self._get_relationship_fields():
-            if isinstance(field, models.ForeignKey) or isinstance(field, models.OneToOneField):
-                related_object = getattr(self, field.name)
+            if (
+                isinstance(field, models.ForeignKey)
+                or isinstance(field, models.OneToOneField)
+                or isinstance(field, GenericForeignKey)
+            ):
+                # fetch related object
+                related_object = getattr(self, field.name, None)
+
                 # only create replication logs for related objects that are ReplicatedModels
-                if related_object and isinstance(related_object, self.__class__):
-                    repl_log = ReplicationLog.objects.create(
-                        # TODO replication targets should implement their own serialization strategy
-                        payload=related_object.to_fixture(),
-                        target=target,
-                        instance=self,
-                        txn_id=transaction.savepoint().split("_")[0],
-                    )
-                    if repr_logs:
-                        repl_log.repr_logs.add(repr_logs)
+                if not related_object or not isinstance(related_object, ReplicatedModel):
+                    continue
+
+                # create new replication log for the related object and add any provided repr logs to it
+                self._create_related_replication_log(related_object, target, txn_id, repr_logs)
 
             elif isinstance(field, models.ManyToManyField):
                 related_objects = getattr(self, field.name).all()
                 for related_object in related_objects:
                     # only create replication logs for related objects that are ReplicatedModels
-                    if isinstance(related_object, self.__class__):
-                        repl_log = ReplicationLog.objects.create(
-                            # TODO replication targets should implement their own serialization strategy
-                            payload=related_object.to_fixture(),
-                            target=target,
-                            instance=self,
-                            txn_id=transaction.savepoint().split("_")[0],
-                        )
-                        if repr_logs:
-                            repl_log.repr_logs.add(repr_logs)
+                    if not isinstance(related_object, ReplicatedModel):
+                        continue
+                    self._create_related_replication_log(
+                        related_object, target, txn_id, repr_logs
+                    )
+            else:
+                logger.error(
+                    "Error creating related replication log for %s: Got unsupported field type: %s"
+                    % (self, field)
+                )
 
         # create replication log for the current object
-        repl_log = ReplicationLog.objects.create(
-            # TODO replication targets should implement their own serialization strategy
-            payload=self.to_fixture(),
-            target=target,
-            instance=self,
-            txn_id=txn_id,
-        )
-        if repr_logs:
-            repl_log.repr_logs.add(repr_logs)
+        replication_log_exists = self.replication_logs.filter(
+            instance_version=self.object_version, target_id=target.pk
+        ).exists()
+        if not replication_log_exists:
+            logger.info(
+                "Creating ReplicationLog for ReplicatedModel (%s) on target %s" % (self, target)
+            )
+            repl_log = ReplicationLog.objects.create(
+                payload=self.to_fixture(),
+                target=target,
+                instance=self,
+                txn_id=txn_id,
+                instance_version=self.object_version,
+            )
+            if repr_logs:
+                repl_log.repr_logs.add(*repr_logs)
 
     def schedule_replication(self, created: bool = False, database: Optional["Database"] = None):
         # must be in a txn for defer_replication to work properly
@@ -265,21 +322,9 @@ class ReplicatedModel(BaseModel):
             else:
                 logger.debug("Not creating repr for object: %s" % self)
 
-            logger.info(
-                "Creating ReplicationLog for ReplicatedModel (%s) on target %s" % (self, target)
+            self._create_replication_logs(
+                target, transaction.savepoint().split("_")[0], repr_logs
             )
-            repl_log = ReplicationLog.objects.create(
-                # TODO replication targets should implement their own serialization strategy
-                payload=self.to_fixture(),
-                target=target,
-                instance=self,
-                txn_id=transaction.savepoint().split("_")[0],
-            )
-
-            # dummy targets return none
-            if repr_logs:
-                logger.debug("Adding repr logs %s to repl log %s" % (repr_logs, repl_log))
-                repl_log.repr_logs.add(*repr_logs)
 
             defer_replication(target)
 
@@ -322,6 +367,7 @@ class ReplicationLog(BaseModel):
         null=True,
         related_name="%(app_label)s_%(class)s_content_type",
     )
+    instance_version = models.PositiveIntegerField(default=0)
     repr_logs = models.ManyToManyField("fractal_database.RepresentationLog")
     txn_id = models.CharField(max_length=255, blank=True, null=True)
 
@@ -383,6 +429,9 @@ class ReplicationTarget(ReplicatedModel):
 
     def get_content_type(self) -> ContentType:
         return ContentType.objects.get_for_model(self.__class__)
+
+    async def aget_content_type(self) -> ContentType:
+        return await sync_to_async(self.get_content_type)()
 
     def get_creds(self) -> Any:
         return None
@@ -537,12 +586,15 @@ class ReplicationTarget(ReplicatedModel):
             .values_list("txn_id", flat=True)
             .distinct()
         )
+
+        content_type = await self.aget_content_type()
+
         return [
             ReplicationLog.objects.filter(
                 txn_id=txn_id,
                 deleted=False,
                 target_id=self.pk,
-                target_type=self.get_content_type(),
+                target_type=content_type,
             )
             .order_by("date_created")
             .select_related("target_type")

@@ -234,9 +234,6 @@ def create_related_instance_configs(
 
     # replicated instances are always replicated to where the related instance is replicated
     if isinstance(related_instance, ReplicatedInstanceConfig):
-        import pdb
-
-        pdb.set_trace()
         related_instance = related_instance.instance
 
     for target in targets:
@@ -307,7 +304,7 @@ def schedule_replication_on_m2m_change(
         # FIXME: this may be causing a duplicate fixture to be sent into the related_instance's room
         # we may only need to call schedule_replication on instance here.
         related_instance.schedule_replication(created=False)
-        instance.schedule_replication(created=False)
+        instance.save()
 
 
 def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
