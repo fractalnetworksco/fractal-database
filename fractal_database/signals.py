@@ -192,7 +192,7 @@ def object_post_save(
     """
     Schedule replication for a ReplicatedModel instance
     """
-    logger.debug("object_post_save called for %s" % instance)
+    logger.info("object_post_save called for %s" % instance)
     if raw:
         logger.info("Loading instance from fixture: %s" % instance)
         return None
@@ -228,23 +228,32 @@ def create_related_instance_configs(
     related_instance: "ReplicatedModel",
     targets: list["MatrixReplicationTarget"],
 ):
-    from fractal_database.models import ReplicatedInstanceConfig
-
     # ensure that the instance is replicated to all targets
     # that the related object is replicated to
+    from fractal_database.models import ReplicatedInstanceConfig
+
+    # replicated instances are always replicated to where the related instance is replicated
+    if isinstance(related_instance, ReplicatedInstanceConfig):
+        import pdb
+
+        pdb.set_trace()
+        related_instance = related_instance.instance
+
     for target in targets:
         try:
-            target.instances.get(id=related_instance.pk)
-            logger.debug(
+            target.instances.get(object_id=related_instance.pk)
+            logger.info(
                 "ReplicatedInstanceConfig for %s on target %s already exists"
                 % (related_instance, target)
             )
             continue
         except ReplicatedInstanceConfig.DoesNotExist:
             pass
-        logger.info("Creating ReplicatedInstanceConfig for %s on target %s" % (instance, target))
+        logger.info(
+            "Creating ReplicatedInstanceConfig for %s on target %s" % (related_instance, target)
+        )
         config = ReplicatedInstanceConfig.objects.create(
-            instance=instance,
+            instance=related_instance,
         )
         target.instances.add(config)
 
@@ -275,15 +284,26 @@ def schedule_replication_on_m2m_change(
         return None
 
     logger.info("Inside schedule_replication_on_m2m_change for %s" % instance)
+
+    import pdb
+
+    pdb.set_trace()
+
     for id in pk_set:
         # fetch the related instance so that we can ensure ReplicatedInstanceConfigs
         # are created for all targets that the related instance is replicated to
         related_instance = model.objects.get(pk=id)
-        targets = related_instance.replication_targets()
-        create_related_instance_configs(instance, related_instance, targets)
+
+        related_targets = related_instance.replication_targets()
+        create_related_instance_configs(instance, related_instance, related_targets)
+
+        # ensure that the related instance is replicated to all targets
+        # that the instance is replicated to
+        instance_targets = instance.replication_targets()
+        create_related_instance_configs(instance, related_instance, instance_targets)
 
         # now that we've ensured that all of the ReplicatedInstanceConfigs for the related instance
-        # have been created, we can schedule replication for the instance.
+        # have been created, we can schedule replication for the instance and related_instance.
         # FIXME: this may be causing a duplicate fixture to be sent into the related_instance's room
         # we may only need to call schedule_replication on instance here.
         related_instance.schedule_replication(created=False)

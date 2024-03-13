@@ -12,6 +12,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.serializers import serialize
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
+from django.db.models.fields import Field
 from django.db.models.manager import BaseManager
 from fractal_database.exceptions import StaleObjectException
 from fractal_database.representations import Representation
@@ -171,6 +172,66 @@ class ReplicatedModel(BaseModel):
             # post save that schedules replication
             models.signals.post_save.connect(object_post_save, sender=model_class)
             models.signals.post_save.connect(update_target_state, sender=model_class)
+
+    def _get_relationship_fields(self) -> List[Field]:
+        relationship_fields = []
+        for field in self._meta.get_fields():
+            if field.is_relation and isinstance(
+                field, (models.ForeignKey, models.ManyToManyField, models.OneToOneField)
+            ):
+                relationship_fields.append(field)
+        return relationship_fields
+
+    def _create_replication_logs(
+        self, target: "ReplicationTarget", txn_id: str, repr_logs: Optional[RepresentationLog]
+    ) -> None:
+        """
+        Introspects the current object to create replication logs for all related objects before
+        creating replication logs for the current object. This ensures that all related objects are
+        replicated before the current object. Necessary when the current object has relationships to
+        other ReplicatedModels.
+        """
+        # create replication logs for related objects
+        for field in self._get_relationship_fields():
+            if isinstance(field, models.ForeignKey) or isinstance(field, models.OneToOneField):
+                related_object = getattr(self, field.name)
+                # only create replication logs for related objects that are ReplicatedModels
+                if related_object and isinstance(related_object, self.__class__):
+                    repl_log = ReplicationLog.objects.create(
+                        # TODO replication targets should implement their own serialization strategy
+                        payload=related_object.to_fixture(),
+                        target=target,
+                        instance=self,
+                        txn_id=transaction.savepoint().split("_")[0],
+                    )
+                    if repr_logs:
+                        repl_log.repr_logs.add(repr_logs)
+
+            elif isinstance(field, models.ManyToManyField):
+                related_objects = getattr(self, field.name).all()
+                for related_object in related_objects:
+                    # only create replication logs for related objects that are ReplicatedModels
+                    if isinstance(related_object, self.__class__):
+                        repl_log = ReplicationLog.objects.create(
+                            # TODO replication targets should implement their own serialization strategy
+                            payload=related_object.to_fixture(),
+                            target=target,
+                            instance=self,
+                            txn_id=transaction.savepoint().split("_")[0],
+                        )
+                        if repr_logs:
+                            repl_log.repr_logs.add(repr_logs)
+
+        # create replication log for the current object
+        repl_log = ReplicationLog.objects.create(
+            # TODO replication targets should implement their own serialization strategy
+            payload=self.to_fixture(),
+            target=target,
+            instance=self,
+            txn_id=txn_id,
+        )
+        if repr_logs:
+            repl_log.repr_logs.add(repr_logs)
 
     def schedule_replication(self, created: bool = False, database: Optional["Database"] = None):
         # must be in a txn for defer_replication to work properly
@@ -607,7 +668,7 @@ class App(ReplicatedModel):
     app_instance_id = models.CharField(max_length=255, unique=True)
     metadata = models.ForeignKey(AppCatalog, on_delete=models.DO_NOTHING)
     devices = models.ManyToManyField("fractal_database.Device")
-    database = models.ForeignKey(Database, on_delete=models.CASCADE)
+    database = models.ForeignKey(Database, on_delete=models.CASCADE, related_name="apps")
 
     # TODO: add current state in order to determine if the app is running or not
 
