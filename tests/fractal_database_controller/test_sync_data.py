@@ -37,7 +37,7 @@ async def test_sync_data_no_tasks(test_room_id):
     mock_json_loads.assert_not_called()
 
 
-@pytest.mark.skip(reason="figure out tasks, queues, and brokers. go back to taqskiq and test")
+# @pytest.mark.skip(reason="figure out tasks, queues, and brokers. go back to taqskiq and test")
 async def test_sync_data_with_tasks(test_matrix_broker, test_multiple_broker_message):
     """ """
 
@@ -47,13 +47,13 @@ async def test_sync_data_with_tasks(test_matrix_broker, test_multiple_broker_mes
     tasks = await test_multiple_broker_message(5)
 
     for task in tasks:
-        test_broker.kick(task)
+        await test_broker.kick(task)
 
     task_filter = create_room_message_filter(
         test_broker.room_id, types=[test_broker.replication_queue.task_types.task]
     )
 
-    returned_tasks = test_broker.replication_queue.get_tasks(timeout=0, task_filter=task_filter)
+    returned_tasks = await test_broker.replication_queue.get_tasks(timeout=0, task_filter=task_filter)
 
     print("right here============", returned_tasks[0])
 

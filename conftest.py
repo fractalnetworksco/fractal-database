@@ -211,7 +211,7 @@ def test_multiple_broker_message():
 
             messages.append(
                 BrokerMessage(
-                    task_id=task_id, task_name="test_name", message=message_bytes, labels={}
+                    task_id=task_id, task_name="test_name", message=message_bytes, labels={'queue': "replication"}
                 )
             )
 

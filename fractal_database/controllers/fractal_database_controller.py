@@ -253,7 +253,7 @@ class FractalDatabaseController(AuthenticatedController):
         length=50,
         fill="█",
         monitor: Optional[TransferMonitor] = None,
-    ):
+    ): #pragma: no cover
         """
         Call this function to print the progress bar.
 
