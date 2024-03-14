@@ -463,7 +463,7 @@ class FractalDatabaseController(AuthenticatedController):
     @use_django
     @auth_required
     @cli_method
-    def shell(self, **kwargs):
+    def shell(self, **kwargs): #pragma: no cover
         """
         Exec into a Django loaded shell for the given Fractal Database Django project.
 
