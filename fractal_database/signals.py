@@ -1,10 +1,16 @@
+import inspect
 import logging
 import os
 import socket
 import tarfile
 import threading
 from secrets import token_hex
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List
+
+try:
+    from functools import wraps
+except ImportError:
+    from django.utils.functional import wraps
 
 from asgiref.sync import async_to_sync
 from django.apps import AppConfig
@@ -12,6 +18,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 from fractal.matrix import MatrixClient
+from fractal_database.exceptions import ReplicatedInstanceConfigAlreadyExists
 from fractal_database.utils import get_project_name, init_poetry_project
 from taskiq_matrix.lock import MatrixLock
 
@@ -36,6 +43,21 @@ try:
     FRACTAL_EXPORT_DIR = settings.FRACTAL_EXPORT_DIR
 except AttributeError:
     FRACTAL_EXPORT_DIR = settings.BASE_DIR / "export"
+
+
+def disable_for_loaddata(signal_handler: Callable[..., Any]):
+    """
+    Decorator that will not run the provided signal handler when loading from fixture.
+    """
+
+    @wraps(signal_handler)
+    def wrapper(*args, **kwargs):
+        for fr in inspect.stack():
+            if inspect.getmodulename(fr[1]) == "loaddata":
+                return
+        signal_handler(*args, **kwargs)
+
+    return wrapper
 
 
 def enter_signal_handler():
@@ -192,7 +214,6 @@ def object_post_save(
     """
     Schedule replication for a ReplicatedModel instance
     """
-    logger.info("object_post_save called for %s" % instance)
     if raw:
         logger.info("Loading instance from fixture: %s" % instance)
         return None
@@ -201,6 +222,11 @@ def object_post_save(
         with transaction.atomic():
             logger.info("Creating a new transaction to prepare for replication of %s" % instance)
             return object_post_save(sender, instance, created, raw, **kwargs)
+
+    if created:
+        logger.info("object_post_save called for newly created object %s" % instance)
+    else:
+        logger.info("object_post_save called for %s" % instance)
 
     # TODO: Make this a context manager so we dont ever have to worry about forgetting to exit
     enter_signal_handler()
@@ -224,37 +250,18 @@ def object_post_save(
 
 
 def create_related_instance_configs(
-    instance: "ReplicatedModel",
     related_instance: "ReplicatedModel",
     targets: list["MatrixReplicationTarget"],
 ):
-    # ensure that the instance is replicated to all targets
-    # that the related object is replicated to
-    from fractal_database.models import ReplicatedInstanceConfig
-
-    # replicated instances are always replicated to where the related instance is replicated
-    if isinstance(related_instance, ReplicatedInstanceConfig):
-        related_instance = related_instance.instance
-
     for target in targets:
         try:
-            target.instances.get(object_id=related_instance.pk)
-            logger.info(
-                "ReplicatedInstanceConfig for %s on target %s already exists"
-                % (related_instance, target)
-            )
-            continue
-        except ReplicatedInstanceConfig.DoesNotExist:
-            pass
-        logger.info(
-            "Creating ReplicatedInstanceConfig for %s on target %s" % (related_instance, target)
-        )
-        config = ReplicatedInstanceConfig.objects.create(
-            instance=related_instance,
-        )
-        target.instances.add(config)
+            target.add_instance(related_instance)
+        except ReplicatedInstanceConfigAlreadyExists as e:
+            logger.info(e.msg)
 
 
+# dont run this signal when loading from fixture
+@disable_for_loaddata
 def schedule_replication_on_m2m_change(
     sender: "ReplicatedModel",
     instance: "ReplicatedModel",
@@ -269,7 +276,6 @@ def schedule_replication_on_m2m_change(
 
     Connected via fractal_database.apps.FractalDatabaseConfig.ready
     """
-
     # ensure that the signal is called in a transaction
     if not transaction.get_connection().in_atomic_block:
         with transaction.atomic():
@@ -282,22 +288,16 @@ def schedule_replication_on_m2m_change(
 
     logger.info("Inside schedule_replication_on_m2m_change for %s" % instance)
 
-    import pdb
-
-    pdb.set_trace()
-
     for id in pk_set:
-        # fetch the related instance so that we can ensure ReplicatedInstanceConfigs
-        # are created for all targets that the related instance is replicated to
+        # Fetch the related instance so that we can ensure ReplicatedInstanceConfigs
+        # are created for all targets that the instance is replicated to
         related_instance = model.objects.get(pk=id)
 
-        related_targets = related_instance.replication_targets()
-        create_related_instance_configs(instance, related_instance, related_targets)
-
-        # ensure that the related instance is replicated to all targets
-        # that the instance is replicated to
+        # Create ReplicatedInstanceConfigs for the related instance on each of the
+        # instance's targets. This ensures that the related instance is replicated
+        # to the same targets as the instance.
         instance_targets = instance.replication_targets()
-        create_related_instance_configs(instance, related_instance, instance_targets)
+        create_related_instance_configs(related_instance, instance_targets)
 
         # now that we've ensured that all of the ReplicatedInstanceConfigs for the related instance
         # have been created, we can schedule replication for the instance and related_instance.
@@ -440,6 +440,8 @@ async def _invite_device(
         await client.invite(user_id=device_matrix_id, room_id=database_room_id, admin=True)
 
 
+# dont run this signal when loading from fixture
+@disable_for_loaddata
 def join_device_to_database(
     sender: "Database", instance: "Database", pk_set: list[Any], **kwargs
 ) -> None:
@@ -687,6 +689,10 @@ def upload_exported_apps(*args, **kwargs) -> None:
         logger.debug("No apps found in export directory. Skipping upload")
         return None
 
+    if not apps:
+        logger.debug("No apps found in export directory. Skipping upload")
+        return None
+
     from fractal_database.models import Database, RepresentationLog
     from fractal_database_matrix.models import MatrixReplicationTarget
 
@@ -740,22 +746,3 @@ def initialize_fractal_app_catalog(*args, **kwargs):  # pragma:no cover
         logger.debug("Created Fractal App Catalog %s" % catalog)
         return
     logger.debug("Fractal App Catalog already exists")
-
-
-# def replicate_related_objects(
-#     sender: "ReplicatedModel",
-#     instance: "ReplicatedModel",
-#     action: str,
-#     reverse: bool,
-#     model: "ReplicatedModel",
-#     pk_set: list[Any],
-#     **kwargs,
-# ) -> None:
-#     """"""
-#     if action not in {"post_add", "post_remove"}:
-#         return None
-
-#     logger.info(f"Inside replicate_related_objects: {instance}")
-#     import pdb
-
-#     pdb.set_trace()

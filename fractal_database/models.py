@@ -14,7 +14,10 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.fields import Field
 from django.db.models.manager import BaseManager
-from fractal_database.exceptions import StaleObjectException
+from fractal_database.exceptions import (
+    ReplicatedInstanceConfigAlreadyExists,
+    StaleObjectException,
+)
 from fractal_database.representations import Representation
 
 from .fields import SingletonField
@@ -125,6 +128,12 @@ class ReplicatedModel(BaseModel):
     class Meta:
         abstract = True
 
+    def get_content_type(self) -> ContentType:
+        return ContentType.objects.get_for_model(self.__class__)
+
+    async def aget_content_type(self) -> ContentType:
+        return await sync_to_async(self.get_content_type)()
+
     def save(self, *args, **kwargs):
         """
         Guards on the object version to ensure that the object version is incremented monotonically
@@ -143,7 +152,7 @@ class ReplicatedModel(BaseModel):
 
     def replication_targets(self) -> List["MatrixReplicationTarget"]:
         configs = self.replication_configs.prefetch_related("matrixreplicationtarget_set").filter(
-            object_id=self.pk
+            object_id=str(self.pk)
         )
         targets = []
         for config in configs:
@@ -255,7 +264,9 @@ class ReplicatedModel(BaseModel):
                     continue
 
                 # create new replication log for the related object and add any provided repr logs to it
-                self._create_related_replication_log(related_object, target, txn_id, repr_logs)
+                # self._create_related_replication_log(related_object, target, txn_id, repr_logs)
+                # FIXME: Should keep track of IDs we've seen so that we dont end up in a loop
+                related_object._create_replication_logs(target, txn_id, repr_logs)
 
             elif isinstance(field, models.ManyToManyField):
                 related_objects = getattr(self, field.name).all()
@@ -263,9 +274,10 @@ class ReplicatedModel(BaseModel):
                     # only create replication logs for related objects that are ReplicatedModels
                     if not isinstance(related_object, ReplicatedModel):
                         continue
-                    self._create_related_replication_log(
-                        related_object, target, txn_id, repr_logs
-                    )
+                    related_object._create_replication_logs(target, txn_id, repr_logs)
+                    # self._create_related_replication_log(
+                    #     related_object, target, txn_id, repr_logs
+                    # )
             else:
                 logger.error(
                     "Error creating related replication log for %s: Got unsupported field type: %s"
@@ -392,14 +404,6 @@ class ReplicatedInstanceConfig(ReplicatedModel):
         null=True,
     )
 
-    def replication_targets(self) -> List["MatrixReplicationTarget"]:
-        """
-        ReplicatedInstanceConfigs replicated to wherever the instance (ReplicatedModel) is replicated.
-        """
-        instance_model: "ReplicatedModel" = self.content_type.model_class()  # type: ignore
-        instance = instance_model.objects.get(pk=self.object_id)
-        return instance.replication_targets()
-
 
 class ReplicationTarget(ReplicatedModel):
     name = models.CharField(max_length=255)
@@ -427,12 +431,6 @@ class ReplicationTarget(ReplicatedModel):
             )
         ]
 
-    def get_content_type(self) -> ContentType:
-        return ContentType.objects.get_for_model(self.__class__)
-
-    async def aget_content_type(self) -> ContentType:
-        return await sync_to_async(self.get_content_type)()
-
     def get_creds(self) -> Any:
         return None
 
@@ -448,8 +446,10 @@ class ReplicationTarget(ReplicatedModel):
         # avoid adding the same instance to the same target
         # if the instance is already being replicated to the target
         try:
-            self.instances.get(object_id=instance.pk)
-            raise Exception(f"ReplicatedModel {instance} is already being replicated to {self}")
+            self.instances.get(
+                object_id=str(instance.pk), content_type=instance.get_content_type()
+            )
+            raise ReplicatedInstanceConfigAlreadyExists(instance, self)
         except ReplicatedInstanceConfig.DoesNotExist:
             pass
 
