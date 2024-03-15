@@ -725,6 +725,25 @@ class App(ReplicatedModel):
     # TODO: add current state in order to determine if the app is running or not
 
 
+class AppInstanceConfig(ReplicatedModel):
+    """
+    Model for storing the local app configuration.
+    """
+
+    STATES = (
+        ("stopped", "stopped"),
+        ("paused", "paused"),
+        ("running", "running"),
+    )
+
+    app = models.OneToOneField(App, on_delete=models.CASCADE, related_name="config")
+    current_device = models.ForeignKey("fractal_database.Device", on_delete=models.CASCADE)
+    target_state = models.CharField(choices=STATES, default="stopped", max_length=255)
+    compose_file = models.TextField()
+
+    # TODO: Handle environment files and other configuration files
+
+
 class Device(ReplicatedModel):
     # type hint for MatrixCredentials reverse relation
     matrixcredentials_set: BaseManager["MatrixCredentials"]

@@ -17,7 +17,10 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from fractal.matrix import MatrixClient
+from fractal_database.app.tasks import launch_app, stop_app
 from fractal_database.exceptions import ReplicatedInstanceConfigAlreadyExists
 from fractal_database.utils import get_project_name, init_poetry_project
 from taskiq_matrix.lock import MatrixLock
@@ -28,6 +31,7 @@ _thread_locals = threading.local()
 
 if TYPE_CHECKING:  # pragma:no cover
     from fractal_database.models import (
+        AppInstanceConfig,
         Database,
         Device,
         ReplicatedModel,
@@ -746,3 +750,44 @@ def initialize_fractal_app_catalog(*args, **kwargs):  # pragma:no cover
         logger.debug("Created Fractal App Catalog %s" % catalog)
         return
     logger.debug("Fractal App Catalog already exists")
+
+
+@receiver(post_save, sender="fractal_database.AppInstanceConfig")
+def schedule_app(
+    sender: "AppInstanceConfig", instance: "AppInstanceConfig", created: bool, **kwargs
+) -> None:
+    """ """
+    from fractal_database.models import Device
+
+    # fetch current device to determine if we should launch the app
+    try:
+        current_device = Device.current_device()
+    except Device.DoesNotExist:
+        logger.warning(
+            "No current device found. Skipping app launch for app %s" % instance.app.name
+        )
+        return None
+
+    # determine if the app is intended to be run on this device
+    if instance.current_device != current_device:
+        logger.info(
+            "App %s is not intended to be run on this device. Skipping app launch. Device %s"
+            % (instance.app.name, instance.current_device)
+        )
+        return None
+
+    match instance.target_state:
+        case "running":
+            logger.info("Launching app %s on device %s" % (instance.app.name, current_device))
+            return launch_app(instance)
+
+        case "stopped":
+            logger.info("Stopping app %s on device %s" % (instance.app.name, current_device))
+            return stop_app(instance)
+
+        case _:
+            logger.warning(
+                "schedule_app got unsupported target state (%s) for app %s"
+                % (instance.target_state, instance.app.name)
+            )
+            return None
