@@ -1,4 +1,5 @@
 import asyncio
+import tempfile
 import json
 import os
 import secrets
@@ -219,3 +220,9 @@ def test_multiple_broker_message():
         return messages
 
     return create
+
+
+@pytest.fixture
+def temp_directory():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        yield temp_dir

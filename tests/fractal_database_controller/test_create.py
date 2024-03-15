@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
+import tempfile
 import os
 from uuid import uuid4
 
@@ -29,24 +30,20 @@ def test_create_FileFoundError(_use_django):
 
     mock_getcwd.assert_called_once()
 
-# @pytest.mark.skip(reason='same project name error')
 @pytest.mark.django_db(transaction=True)
-def test_create_db_created(_use_django):
+def test_create_db_created(_use_django, temp_directory):
     """
     """
 
     project = 'mytestapp'
+    
+    os.chdir(temp_directory)
     path = os.path.join(f"{os.getcwd()}/{project}")
 
     # create a FractalDatabaseController object
     controller = FractalDatabaseController()
 
-    controller.create(project)
-
-    print('you are here')
-
-    if os.path.exists(path):
-        print('Deleting directory')
-        os.rmdir(path)
-    else:
-        assert False
+    try:
+        controller.create(project)
+    except:
+        raise

@@ -552,15 +552,16 @@ IPython.start_ipython(argv=[], user_ns=context, exec_lines=[], config=config)
         current_device = Device.current_device()
         device_creds = current_db_target.matrixcredentials_set.get(device=current_device)
 
-        database = Database.objects.create(name=db_name)
-        target = MatrixReplicationTarget.objects.create(
-            name=db_name,
-            database=database,
-            homeserver=current_db_target.homeserver,
-            primary=True,
-        )
-        target.matrixcredentials_set.add(device_creds)
-        database.schedule_replication(created=True, database=database)
+        with transaction.atomic():
+            database = Database.objects.create(name=db_name)
+            target = MatrixReplicationTarget.objects.create(
+                name=db_name,
+                database=database,
+                homeserver=current_db_target.homeserver,
+                primary=True,
+            )
+            target.matrixcredentials_set.add(device_creds)
+            database.schedule_replication(created=True, database=database)
 
     def _verify_repos_cloned(self, source_dir: str = DEFAULT_FRACTAL_SRC_DIR):
         """
