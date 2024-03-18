@@ -2,8 +2,12 @@ import asyncio
 import logging
 import subprocess
 import sys
+from typing import TYPE_CHECKING
 
 from fractal_database_matrix.broker import broker
+
+if TYPE_CHECKING:
+    from fractal_database.models import AppInstanceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -46,3 +50,8 @@ async def replicate_fixture(fixture: str) -> None:
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, load_data_from_dicts, fixture)
+
+
+async def launch_app(app_config: "AppInstanceConfig", *args, **kwargs) -> None:
+    """ """
+    print(f"Launching app {app_config.app.name} with config {app_config}")
