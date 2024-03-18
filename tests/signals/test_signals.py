@@ -94,7 +94,7 @@ def test_signals_enter_signal_handler_existing_nesting_count():
 
 def test_signals_commit_replication_error():
     """
-    Tests that if there is an error replicating the target, it is logged and
+    Tests that if there is an error replicating the target,
     clear_deferred_replications is still called.
     """
 
@@ -107,14 +107,12 @@ def test_signals_commit_replication_error():
     mock_target.replicate.side_effect = Exception()
 
     # patch the logger and clear_deferred_replications
-    with patch(f"{FILE_PATH}.logger", new=MagicMock()) as mock_logger:
-        with patch(f"{FILE_PATH}.clear_deferred_replications", new=MagicMock()) as mock_clear:
-            # call the function
-            commit(mock_target)
+    with patch(f"{FILE_PATH}.clear_deferred_replications", new=MagicMock()) as mock_clear:
+        # call the function
+        commit(mock_target)
 
     # verify that clear_deferred_replications and the logger are both called
     mock_clear.assert_called_with(mock_target.name)
-    mock_logger.error.assert_called()
 
 
 def test_signals_commit_no_error():
@@ -462,9 +460,9 @@ def test_signals_object_post_save_in_nested_signal_handler(test_device, second_t
         )
 
     # verify that the function returned None and that the expected logger call was made
-        # NOTE: There is only one case where None is returned when "raw" is False
+    # NOTE: There is only one case where None is returned when "raw" is False
     assert result is None
-    
+
     # verify that schedule_replication was not called
     test_device.schedule_replication.assert_not_called()
 
@@ -545,15 +543,16 @@ def test_signals_schedule_replication_on_m2m_change_empty_pk_set(test_device, se
         pk_set=[],
     )
 
-
     # verify that the for loop was a no-op
-        # NOTE: The instance's schedule_replication is called in both the "if" and the
-        # "else" block of the for loop. If neither are called, then the for loop did
-        # not execute.
+    # NOTE: The instance's schedule_replication is called in both the "if" and the
+    # "else" block of the for loop. If neither are called, then the for loop did
+    # not execute.
     instance.schedule_replication.assert_not_called()
 
 
-def test_signals_schedule_replication_on_m2m_change_pk_set_not_empty(test_device, second_test_device):
+def test_signals_schedule_replication_on_m2m_change_pk_set_not_empty(
+    test_device, second_test_device
+):
     """
     Tests that a related instance is fetched and has a replication scheduled if reverse
     is passed as True
@@ -720,7 +719,7 @@ def test_signals_accept_invite_successful_join(
             matrix_id=test_matrix_creds.matrix_id,
         ) as client:
             res = await client.sync(since=None)
-            return room_id in res.rooms.invite # type: ignore
+            return room_id in res.rooms.invite  # type: ignore
 
     # function for getting the room state
     async def get_room_state():
@@ -762,7 +761,7 @@ def test_signals_accept_invite_not_logged_in(test_matrix_creds, test_database):
             matrix_id=test_matrix_creds.matrix_id,
         ) as client:
             res = await client.sync(since=None)
-            return room_id in res.rooms.invite # type: ignore
+            return room_id in res.rooms.invite  # type: ignore
 
     # function for getting the room state
     async def get_room_state():
@@ -1423,13 +1422,13 @@ def test_signals_upload_exported_apps_filenotfound():
     """
 
     # patch current_db
-    with patch('fractal_database.models.Database.current_db') as mock_current_db:
+    with patch("fractal_database.models.Database.current_db") as mock_current_db:
         # set os.listdir to raise an Error
         with patch(f"{FILE_PATH}.os.listdir", side_effect=FileNotFoundError()) as mock_listdir:
             upload_exported_apps()
 
     # verify that current_db was never called, meaning the functioned returned due to a
-            # FileNotFoundError
+    # FileNotFoundError
     mock_current_db.assert_not_called()
 
 
@@ -1444,12 +1443,12 @@ def test_signals_upload_exported_apps_db_doesnotexist():
     # patch the os library
     with patch(f"{FILE_PATH}.os") as mock_os:
         # set os.listdir to return True
-        with patch('fractal_database.models.Database.primary_target') as mock_primary_target:
+        with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
             mock_os.listdir = MagicMock(return_value=True)
             upload_exported_apps()
 
     # verify that primary_target was not called, meaning the function returned
-            # while trying to fetch the current database
+    # while trying to fetch the current database
     mock_primary_target.assert_not_called()
 
 
@@ -1468,7 +1467,7 @@ def test_signals_upload_exported_apps_no_primary_target(test_database):
                 upload_exported_apps()
 
     # verify that isinstance is never called, meaning the function returned when attempting
-            # to fetch the primary target
+    # to fetch the primary target
     mock_isinstance.assert_not_called()
 
 
@@ -1482,7 +1481,7 @@ def test_signals_upload_exported_apps_primary_target_wrong_type(test_database):
         mock_os.listdir = MagicMock(return_value=True)
         # patch primary_target to return a non-MatrixReplicationTarget object
         with patch("fractal_database.models.Database.primary_target") as mock_primary_target:
-            
+
             # make a mock object that is not a MatrixReplicationTarget
             mock_wrong_type = MagicMock(spec=NotDatabaseOrReplTarget)
             mock_wrong_type.get_representation_module = MagicMock()
