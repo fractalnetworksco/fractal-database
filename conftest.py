@@ -1,31 +1,33 @@
 import asyncio
-import shutil
 import os
 import secrets
+import shutil
 from typing import Generator
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
-from fractal_database.signals import FRACTAL_EXPORT_DIR
 
 import pytest
 from fractal.cli.controllers.auth import AuthController
 from fractal.cli.utils import data_dir
 from fractal_database.models import Database, Device  # MatrixCredentials
+from fractal_database.signals import FRACTAL_EXPORT_DIR
 from nio import AsyncClient
 
 try:
     TEST_HOMESERVER_URL = os.environ["MATRIX_HOMESERVER_URL"]
     TEST_USER_USER_ID = os.environ["HS_USER_ID"]
     TEST_USER_ACCESS_TOKEN = os.environ["MATRIX_ACCESS_TOKEN"]
-    TEST_ROOM_ID = os.environ['MATRIX_ROOM_ID']
+    TEST_ROOM_ID = os.environ["MATRIX_ROOM_ID"]
 except KeyError as e:
     raise Exception(
         f"Please run prepare-test.py first, then source the generated environment file: {e}"
     )
 
+
 @pytest.fixture
 def test_room_id():
     return TEST_ROOM_ID
+
 
 @pytest.fixture
 def test_homeserver_url() -> str:
@@ -92,6 +94,7 @@ def test_matrix_creds(test_device):
 
     return test_device.matrixcredentials_set.get()
 
+
 @pytest.fixture(autouse=True)
 def cleanup():
     yield
@@ -106,13 +109,14 @@ def cleanup():
     except FileNotFoundError:
         pass
 
-@pytest.fixture(scope='function')
+
+@pytest.fixture(scope="function")
 def test_yaml_dict():
     yaml_info = {
         "test_project": "test_project",
-        'TEST_DATABASE': str(uuid4()),
-        'ANOTHER_DATABASE': str(uuid4()),
-        'YET_ANOTHER_DATABASE': str(uuid4()),
+        "TEST_DATABASE": str(uuid4()),
+        "ANOTHER_DATABASE": str(uuid4()),
+        "YET_ANOTHER_DATABASE": str(uuid4()),
     }
 
     return yaml_info
