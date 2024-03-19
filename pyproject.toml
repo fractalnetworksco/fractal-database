@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fractal-database"
-version = "0.0.10"
+version = "0.0.11"
 description = ""
 authors = ["Mo Balaa <balaa@fractalnetworks.co>"]
 readme = "README.md"
@@ -8,7 +8,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 fractal-cli = ">=0.0.1"
-fractal-database-matrix = ">=0.0.1"
+fractal-database-matrix = ">=0.0.5"
 django = ">=5.0.0"
 pytest = { version = "^7.4.3", optional = true }
 pytest-asyncio = { version = "^0.21.1", optional = true }
