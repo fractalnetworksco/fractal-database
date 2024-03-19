@@ -17,6 +17,7 @@ from fractal_database.models import Database, Device  # MatrixCredentials
 from fractal_database.signals import FRACTAL_EXPORT_DIR
 from taskiq.message import BrokerMessage
 from taskiq_matrix.matrix_broker import MatrixBroker
+from fractal_database.utils import init_poetry_project
 
 try:
     TEST_HOMESERVER_URL = os.environ["MATRIX_HOMESERVER_URL"]
@@ -226,3 +227,14 @@ def test_multiple_broker_message():
 def temp_directory():
     with tempfile.TemporaryDirectory() as temp_dir:
         yield temp_dir
+
+@pytest.fixture
+def temp_directory_with_pyproject(temp_directory):
+    current_dir = os.getcwd()
+
+    try:
+        os.chdir(temp_directory)
+        init_poetry_project('test_project_name')
+        os.chdir(current_dir)
+    finally:
+        yield temp_directory
