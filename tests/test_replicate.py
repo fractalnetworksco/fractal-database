@@ -198,8 +198,6 @@ async def test_replicate_init_instance_db_example_fixture_works_with_aget():
                         database.aprimary_target.assert_awaited_once()
 
 
-@pytest.mark.django_db
-@pytest.mark.asyncio
 async def test_replicate_handle_objectdoesnotexist_raise_command_error():
     command_instance = Command()
     with patch("os.environ.get", return_value=None) as mock_get:
@@ -212,47 +210,121 @@ async def test_replicate_handle_objectdoesnotexist_raise_command_error():
             assert "No current database configured. Have you applied migrations?" in str(e.value)
 
 
-@pytest.mark.django_db
-@pytest.mark.asyncio
-async def test_replicate_handle_if_no_target():
-    database = await sync_to_async(Database.objects.create)(name="Test Database")
-    database.primary_target = MagicMock(return_value=None)
-    command_instance = Command()
+async def test_replicate_handle_if_current_db_raises_object_does_not_exist():
+    # Test scenario where current_db raises ObjectDoesNotExist
+    mock_current_db = MagicMock(side_effect=ObjectDoesNotExist)
     with patch("os.environ.get", return_value=None) as mock_get:
         with patch(
-            "fractal_database.management.commands.replicate.Database.current_db"
-        ) as mock_current_db:
-            with patch.object(Database, "current_db", return_value=database):
-                with pytest.raises(CommandError) as e:
-                    await sync_to_async(command_instance.handle)()
-                assert (
-                    "No primary replication target configured. Have you configured the MatrixReplicationTarget?"
-                    in str(e.value)
-                )
+            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
+        ):
+            command_instance = Command()
+            with pytest.raises(CommandError) as e:
+                await sync_to_async(command_instance.handle)()
+            assert "No current database configured. Have you applied migrations?" in str(e.value)
 
 
-@pytest.mark.skip("Not Finished")
-@pytest.mark.django_db
-@pytest.mark.asyncio
-async def test_replicate_handle_if_no_roomid_runs_correctly():
-    database = await sync_to_async(Database.objects.create)(name="Test Database")
-    database.primary_target = MatrixReplicationTarget
-    command_instance = Command()
+async def test_replicate_handle_if_current_db_returns_valid_database_with_no_target():
+    # Test scenario where current_db returns a valid database object with no target
+    mock_database = MagicMock()
+    mock_database.primary_target.return_value = None
+    mock_current_db = MagicMock(return_value=mock_database)
     with patch("os.environ.get", return_value=None) as mock_get:
         with patch(
-            "fractal_database.management.commands.replicate.Database.current_db"
-        ) as mock_current_db:
-            with patch.object(Database, "current_db", return_value=database):
+            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
+        ):
+            command_instance = Command()
+            with pytest.raises(CommandError) as e:
+                await sync_to_async(command_instance.handle)()
+            assert (
+                "No primary replication target configured. Have you configured the MatrixReplicationTarget?"
+                in str(e.value)
+            )
+
+
+async def test_replicate_handle_if_primary_target_not_none():
+    mock_primary_target = MagicMock(return_value="MockReplicationTarget")
+
+    mock_database = MagicMock()
+    mock_database.primary_target = mock_primary_target
+    mock_current_db = MagicMock(return_value=mock_database)
+
+    with patch("os.environ.get", return_value=None) as mock_get:
+        with patch(
+            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
+        ):
+            command_instance = Command()
+            with pytest.raises(CommandError) as e:
+                await sync_to_async(command_instance.handle)()
+            assert (
+                "Only MatrixReplicationTarget primary targets are supported for replication"
+                in str(e.value)
+            )
+
+
+@pytest.mark.skip("Database error checking column")
+@pytest.mark.django_db
+async def test_replicate_handle_current_device():
+    mock_primary_target = MagicMock(return_value=MatrixReplicationTarget())
+
+    mock_database = MagicMock()
+    mock_database.primary_target = mock_primary_target
+    mock_current_db = MagicMock(return_value=mock_database)
+
+    with patch("os.environ.get", return_value=None) as mock_get:
+        with patch(
+            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
+        ):
+            command_instance = Command()
+            await sync_to_async(command_instance.handle)()
+
+
+@pytest.mark.skip("Database error checking column")
+@pytest.mark.django_db
+async def test_replicate_handle_works_correctly():
+    mock_target = MagicMock(spec=MatrixReplicationTarget)
+    mock_primary_target = MagicMock(return_value=mock_target)
+    mock_database = MagicMock()
+    mock_database.primary_target = mock_primary_target
+    mock_current_db = MagicMock(return_value=mock_database)
+    with patch("os.environ.get", return_value=None) as mock_get:
+        with patch(
+            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
+        ):
+            with patch("fractal_database.models.Device") as mock_device:
+                mock_device.return_value = "current_device"
+                command_instance = Command()
                 await sync_to_async(command_instance.handle)()
 
 
-@pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_replicate_handle_if_roomid_keyerror():
-    command_instance = Command()
-    with patch("os.environ.get") as mock_get:
+async def test_replicate_handle_if_primary_target_not_none_keyerror():
+    mock_current_db = MagicMock(side_effect=ObjectDoesNotExist)
+    mock_environ = {"MATRIX_ROOM_ID": "test_room_id", "MATRIX_ACCESS_TOKEN": "test_access_token"}
+    with patch("os.environ", mock_environ):
         with patch(
-            "fractal_database.management.commands.replicate.Database.current_db",
-            side_effect=ObjectDoesNotExist,
-        ) as mock_current_db:
-            print("hey")
+            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
+        ):
+            command_instance = Command()
+            with pytest.raises(CommandError) as e:
+                await sync_to_async(command_instance.handle)()
+            assert "Missing environment variable 'MATRIX_HOMESERVER_URL'" in str(e.value)
+            assert isinstance(e.value.__cause__, KeyError)
+
+
+@pytest.mark.skip("Still working on")
+async def test_replicate_handle_if_primary_target_not_none_works():
+    mock_current_db = MagicMock(side_effect=ObjectDoesNotExist)
+    mock_environ = {
+        "MATRIX_ROOM_ID": "test_room_id",
+        "MATRIX_ACCESS_TOKEN": "test_access_token",
+        "MATRIX_HOMESERVER_URL": "test_homeserver_url",
+    }
+    with patch("os.environ", mock_environ):
+        with patch(
+            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
+        ):
+            with patch(
+                "fractal_database.management.commands.replicate.Command._init_instance_db"
+            ):
+                command_instance = Command()
+                await sync_to_async(command_instance.handle)()
