@@ -53,7 +53,7 @@ class FractalDatabaseController(AuthenticatedController):
 
     async def _upload_file(self, file: str, monitor: Optional[TransferMonitor] = None) -> str:
         async with MatrixClient(homeserver_url=self.homeserver_url, access_token=self.access_token) as client:  # type: ignore
-            return await client.upload_file(file, monitor=monitor)
+            return await client.upload_file(file, monitor=monitor, filename=file)
 
     async def _list_invites(self) -> Dict[str, InviteInfo]:
         async with MatrixClient(
@@ -800,10 +800,7 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
     @cli_method
     def upload(self, file: str, verbose: bool = True) -> str:
         """
-        Builds a given database into a Docker container and exports it as a tarball, and
-        uploads it to the Fractal Matrix server.
-
-        Must be in the directory where pyproject.toml is located.
+        Uploads a given file path to the server.
         ---
         Args:
             file: The tarball file to upload.

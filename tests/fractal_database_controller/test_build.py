@@ -16,6 +16,7 @@ FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 FRACTAL_PATH = "fractal.matrix.FractalAsyncClient"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
 
+#! NOT FINISHED
 
 def test_build_no_fractal_app(temp_directory):
     """
@@ -40,6 +41,8 @@ def test_build_no_fractal_app(temp_directory):
         mock_get_fractal_app.return_value = {}
         with pytest.raises(SystemExit):
             controller._build(name="test_name")
+
+    os.chdir(original_directory)
 
 
 def test_build_fail_to_connect_to_docker(temp_directory_with_pyproject):
