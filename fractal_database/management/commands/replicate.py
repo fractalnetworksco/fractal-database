@@ -95,10 +95,7 @@ class Command(BaseCommand):
                     % target.__class__.__name__
                 )
 
-            # fetch matrix credentials for current device
-            current_device = Device.current_device()
-            access_token = target.matrixcredentials_set.get(device=current_device).access_token
-            print(f"USING ACCESSTOKEN {access_token}")
+            access_token = target.matrixcredentials.access_token
             homeserver_url = target.homeserver
             room_id = target.metadata["room_id"]
         else:

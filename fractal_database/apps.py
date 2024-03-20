@@ -17,6 +17,7 @@ class FractalDatabaseConfig(AppConfig):
         from fractal_database.models import Database, Device, ReplicatedModel
         from fractal_database.signals import (
             create_database_and_matrix_replication_target,
+            initialize_fractal_app_catalog,
             join_device_to_database,
             register_device_account,
             schedule_replication_on_m2m_change,
@@ -38,13 +39,21 @@ class FractalDatabaseConfig(AppConfig):
             models.signals.post_migrate.connect(
                 create_database_and_matrix_replication_target, sender=self
             )
+            models.signals.post_migrate.connect(initialize_fractal_app_catalog, sender=self)
         else:
             logger.warning(
                 "MATRIX_ROOM_ID is set, not creating database and matrix replication target."
             )
 
         models.signals.post_migrate.connect(upload_exported_apps, sender=self)
+
+        # connect the signal to register the device account for the Device model and its subclasses
         models.signals.post_save.connect(register_device_account, sender=Device)
+        for model in Device.get_subclasses():
+            logger.debug(
+                f"Connecting register_device_account signal for Device subclass: {model}"
+            )
+            models.signals.post_save.connect(register_device_account, sender=model)
 
         # automatically connect schedule replication signal for replicated models that have
         # many to many fields on them.
@@ -63,6 +72,10 @@ class FractalDatabaseConfig(AppConfig):
                         field_name = field.related_name
                     else:
                         field_name = f"{field.name}_set"
+
+                    # verify that this field is a ReplicatedModel subclass
+                    if not issubclass(field.related_model, ReplicatedModel):
+                        continue
 
                 through = getattr(model, field_name).through
                 if through is not None:

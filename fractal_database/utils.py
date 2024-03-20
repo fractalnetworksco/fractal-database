@@ -29,21 +29,26 @@ def use_django(func: Callable[..., Any]):
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
         args = [self] + list(args)
-        projects, _ = read_user_data("projects.yaml")
-        if len(projects) > 1:
-            project_name = os.environ.get("FRACTAL_PROJECT_NAME")
-            if not project_name:
+        project_name = os.environ.get("FRACTAL_PROJECT_NAME")
+        if not project_name:
+            # attempt to read the project name from the projects.yaml file
+            projects, _ = read_user_data("projects.yaml")
+
+            # if there is more than one project then we require the user to specify
+            # the project name as an environment variable
+            if len(projects) > 1:
                 raise Exception(
                     "Multiple projects found. Please specify a FRACTAL_PROJECT_NAME as an environment variable"
                 )
-        else:
             project_name = list(projects.keys())[0]
+
         sys.path.append(os.path.join(FRACTAL_DATA_DIR, project_name))
         os.environ["DJANGO_SETTINGS_MODULE"] = f"{project_name}.settings"
         try:
             django.setup()
         except Exception as e:
             logger.error(f"Error setting up Django: {e}")
+            raise e
 
         kwargs["project_name"] = project_name
         res = func(*args, **kwargs)
