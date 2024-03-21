@@ -42,25 +42,29 @@ async def test_replicate_init_instance_db_objectdoesnotexit_pass():
     homeserver_url = "https://homeserver.com"
     room_id = "room_id"
 
-    # Mock every function necessary (pretty sure there are some unnecessary mocks need to remove)
+    mock_database = MagicMock()
+    mock_database.aget = AsyncMock(return_value=MagicMock(pk=1))
+    mock_database.aprimary_target = AsyncMock(return_value=MagicMock())
+
+    # Mock every function necessary
     with patch(
         "fractal_database.management.commands.replicate.Database.acurrent_db",
         side_effect=ObjectDoesNotExist,
     ) as mock_acurrent_db:
         with patch(
             "fractal_database.management.commands.replicate.MatrixClient"
-        ) as mock_matrixclient:
+        ) as mock_matrix_client:
             with patch("fractal_database.management.commands.replicate.json.loads") as mock_loads:
                 with patch(
                     "fractal_database.replication.tasks.replicate_fixture", new=AsyncMock()
                 ) as mock_replicate_fixture:
                     with patch(
                         "fractal_database.management.commands.replicate.Database.objects.aget",
-                        new=AsyncMock(),
-                    ) as mock_aget:
+                        new=AsyncMock(return_value=mock_database),
+                    ):
                         with patch(
                             "fractal_database.models.Database.aprimary_target", new=AsyncMock()
-                        ) as mock_aprimary_target:
+                        ):
                             with patch(
                                 "fractal_database.management.commands.replicate.DatabaseConfig.objects.acreate",
                                 new=AsyncMock(),
@@ -70,7 +74,7 @@ async def test_replicate_init_instance_db_objectdoesnotexit_pass():
                                 ) as mock_get_or_create:
                                     with patch(
                                         "fractal_database.management.commands.replicate.MatrixCredentials.objects.get_or_create"
-                                    ) as mock_matrixcredentials_get_or_create:
+                                    ):
                                         # Mock the return value of get_or_create to return a tuple
                                         mock_device = MagicMock()
                                         mock_get_or_create.return_value = (mock_device, True)
@@ -81,7 +85,9 @@ async def test_replicate_init_instance_db_objectdoesnotexit_pass():
                                             homeserver_url=homeserver_url,
                                             room_id=room_id,
                                         )
-                                        mock_matrixcredentials_get_or_create.assert_called_once()
+                                        mock_matrix_client.assert_called_once()
+                                        mock_acurrent_db.assert_called_once()
+                                        mock_replicate_fixture.assert_called()
 
 
 @pytest.mark.asyncio
@@ -261,13 +267,16 @@ async def test_replicate_handle_if_primary_target_not_none():
             )
 
 
-@pytest.mark.skip("Database error checking column")
+# @pytest.mark.skip("Datatype mismatch")
 @pytest.mark.django_db
 async def test_replicate_handle_current_device():
-    mock_primary_target = MagicMock(return_value=MatrixReplicationTarget())
+    target = await sync_to_async(MatrixReplicationTarget.objects.create)(
+        homeserver="example_homeserver_url",
+        metadata={"room_id": "example_room_id"},
+    )
 
     mock_database = MagicMock()
-    mock_database.primary_target = mock_primary_target
+    mock_database.primary_target = target
     mock_current_db = MagicMock(return_value=mock_database)
 
     with patch("os.environ.get", return_value=None) as mock_get:
@@ -278,20 +287,23 @@ async def test_replicate_handle_current_device():
             await sync_to_async(command_instance.handle)()
 
 
-@pytest.mark.skip("Database error checking column")
+@pytest.mark.skip("Infinite loop")
 @pytest.mark.django_db
 async def test_replicate_handle_works_correctly():
+    # Mock the primary target and database
     mock_target = MagicMock(spec=MatrixReplicationTarget)
     mock_primary_target = MagicMock(return_value=mock_target)
     mock_database = MagicMock()
     mock_database.primary_target = mock_primary_target
+
     mock_current_db = MagicMock(return_value=mock_database)
+    mock_current_device = MagicMock(return_value="current_device")
+
     with patch("os.environ.get", return_value=None) as mock_get:
         with patch(
             "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
         ):
-            with patch("fractal_database.models.Device") as mock_device:
-                mock_device.return_value = "current_device"
+            with patch("fractal_database.models.Device.current_device", mock_current_device):
                 command_instance = Command()
                 await sync_to_async(command_instance.handle)()
 
@@ -311,8 +323,55 @@ async def test_replicate_handle_if_primary_target_not_none_keyerror():
             assert isinstance(e.value.__cause__, KeyError)
 
 
-@pytest.mark.skip("Still working on")
+@pytest.mark.skip("Infinite Loop")
+async def test_replicate_handle_with_env_set():
+    mock_target = MagicMock(spec=MatrixReplicationTarget)
+
+    mock_environ = {
+        "MATRIX_ROOM_ID": "test_room_id",
+        "MATRIX_ACCESS_TOKEN": "test_access_token",
+        "MATRIX_HOMESERVER_URL": "test_homeserver_url",
+    }
+
+    with patch("os.environ", mock_environ):
+        with patch(
+            "fractal_database.management.commands.replicate.Database.current_db",
+            return_value=mock_target,
+        ) as mock_current_db:
+            with patch(
+                "fractal_database.management.commands.replicate.Command._init_instance_db"
+            ) as mock_instance_db:
+                command_instance = Command()
+                await sync_to_async(command_instance.handle)()
+                mock_current_db.assert_not_called()  # Ensure current_db is not called when env variables are set
+
+
+@pytest.mark.skip("Infinite Loop")
+@pytest.mark.asyncio
 async def test_replicate_handle_if_primary_target_not_none_works():
+    with patch(
+        "fractal_database.management.commands.replicate.Database.current_db",
+        side_effect=ObjectDoesNotExist,
+    ) as mock_current_db:
+        mock_environ = {
+            "MATRIX_ROOM_ID": "test_room_id",
+            "MATRIX_ACCESS_TOKEN": "test_access_token",
+            "MATRIX_HOMESERVER_URL": "test_homeserver_url",
+        }
+        with patch("os.environ", mock_environ):
+            with patch(
+                "fractal_database.management.commands.replicate.Command._init_instance_db"
+            ) as mock_init_instance_db:
+                command_instance = Command()
+                await sync_to_async(command_instance.handle)()
+                mock_current_db.assert_called_once()
+                mock_init_instance_db.assert_called_once_with(
+                    "test_access_token", "test_homeserver_url", "test_room_id"
+                )
+
+
+@pytest.mark.skip("Infinite Loop")
+async def test_replicate_handle_python_path():
     mock_current_db = MagicMock(side_effect=ObjectDoesNotExist)
     mock_environ = {
         "MATRIX_ROOM_ID": "test_room_id",
