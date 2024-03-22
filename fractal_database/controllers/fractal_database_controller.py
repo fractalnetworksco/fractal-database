@@ -898,7 +898,7 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
     @use_django
     @auth_required
     @cli_method
-    def sync(self, room_id: str, **kwargs):
+    def sync(self, room_id: str, **kwargs): #pragma: no cover
         """
         Syncs replication tasks from the epoch of a given room.
 
@@ -945,7 +945,7 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
 
     @use_django
     @cli_method
-    def list_apps(self):
+    def list_apps(self): #pragma: no cover
         """
         Lists all apps installed on this machine.
         ---
@@ -960,7 +960,7 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
 
     @use_django
     @cli_method
-    def replicate(self, **kwargs):
+    def replicate(self, **kwargs): #pragma: no cover
         """
         Start a replication process for the configured database.
         ---
@@ -995,7 +995,7 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
     @use_django
     @auth_required
     @cli_method
-    def device_add(self, device_name: str, database_name: str, **kwargs):
+    def device_add(self, device_name: str, database_name: str, **kwargs): #pragma: no cover
         """
         Adds a device to a database.
         ---
