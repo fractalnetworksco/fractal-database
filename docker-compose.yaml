@@ -1,37 +1,52 @@
+# Comments are provided throughout this file to help you get started.
+# If you need more help, visit the Docker compose reference guide at
+# https://docs.docker.com/go/compose-spec-reference/
+
+# Here the instructions define your application as a service called "app".
+# This service is built from the Dockerfile in the current directory.
+# You can add other services your application may depend on here, such as a
+# database or a cache. For examples, see the Awesome Compose repository:
+# https://github.com/docker/awesome-compose
 services:
-  synapse:
-    image: fractal-database-synapse:latest
+  app:
     build:
-      context: ./synapse/config
-      dockerfile: Dockerfile.synapse
-      args:
-        SYNAPSE_SERVER_NAME: "localhost"
-        SYNAPSE_REPORT_STATS: "no"
-    healthcheck:
-      test: curl localhost:8008/health
-      interval: 1s
-      timeout: 10s
-      retries: 10
-    labels:
-      - "org.homeserver.test=true"
-    # --timeout on up doesn't work with --exit-code-from. This ensures the synapse
-    # container is stopped immediately when the device exits
-    stop_signal: SIGKILL
-  test:
-    image: fractal-database-test:test
-    build:
-      context: ./
-      dockerfile: Dockerfile.test
-    depends_on:
-      synapse:
-        condition: service_healthy
-    environment:
-      ENV: test
-      TEST_CONFIG_DIR: /test-config
-      TEST_HOMESERVER_URL: http://synapse:8008
-      # not actually running a second synapse currently
-      TEST_ALTERNATE_HOMESERVER_URL: https://synapse2:8008
-      SYNAPSE_DOCKER_LABEL: "org.homeserver.test=true"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    working_dir: /code
+      context: .
+      target: final
+    # If your application exposes a port, uncomment the following lines and change
+    # the port numbers as needed. The first number is the host port and the second
+    # is the port inside the container.
+    # ports:
+    #   - 8080:8080
+
+    # The commented out section below is an example of how to define a PostgreSQL
+    # database that your application can use. `depends_on` tells Docker Compose to
+    # start the database before your application. The `db-data` volume persists the
+    # database data between container restarts. The `db-password` secret is used
+    # to set the database password. You must create `db/password.txt` and add
+    # a password of your choosing to it before running `docker compose up`.
+    #     depends_on:
+    #       db:
+    #         condition: service_healthy
+    #   db:
+    #     image: postgres
+    #     restart: always
+    #     user: postgres
+    #     secrets:
+    #       - db-password
+    #     volumes:
+    #       - db-data:/var/lib/postgresql/data
+    #     environment:
+    #       - POSTGRES_DB=example
+    #       - POSTGRES_PASSWORD_FILE=/run/secrets/db-password
+    #     expose:
+    #       - 5432
+    #     healthcheck:
+    #       test: [ "CMD", "pg_isready" ]
+    #       interval: 10s
+    #       timeout: 5s
+    #       retries: 5
+    # volumes:
+    #   db-data:
+    # secrets:
+    #   db-password:
+    #     file: db/password.txt
