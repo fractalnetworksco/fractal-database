@@ -4,7 +4,7 @@ import os
 import socket
 import sys
 
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.management.base import BaseCommand, CommandError
 from fractal.cli import FRACTAL_DATA_DIR
@@ -29,7 +29,7 @@ class Command(BaseCommand):
             database = await Database.acurrent_db()
             # FIXME: Make sure this is right
             print(f"Already have database {database} configured.")
-            return
+            return database
         except ObjectDoesNotExist:
             pass
 
@@ -53,26 +53,37 @@ class Command(BaseCommand):
             from fractal_database.replication.tasks import replicate_fixture
 
             fixture_str = db_state_res.content["fixture"]
-            fixture = json.loads(fixture_str)
-            await replicate_fixture(fixture)
+            await replicate_fixture(fixture_str)
+            database_fixture = json.loads(fixture_str)
             fixture_str = target_state_res.content["fixture"]
-            fixture = json.loads(fixture_str)
-            await replicate_fixture(fixture)
+            target_fixture = json.loads(fixture_str)
+            await replicate_fixture(fixture_str)
 
-        database = await Database.objects.aget(pk=fixture["pk"])
-        target = await database.aprimary_target()
+        serialized_database = None
+        for item in database_fixture:
+            if item.get("model") == "fractal_database.database":
+                serialized_database = item
+                break
 
-        await DatabaseConfig.objects.acreate(current_db=database)
+        database = await Database.objects.aget(pk=serialized_database["pk"])
+        primary_target = await database.aprimary_target()
 
-        device, _ = Device.objects.get_or_create(
+        # create device for the current instance if it doesn't exist
+        device, _ = await Device.objects.aget_or_create(
             name__icontains=socket.gethostname(), defaults={"name": socket.gethostname()}
         )
-        MatrixCredentials.objects.get_or_create(
-            access_token=access_token,
-            target=target,
-            device=device,
-            defaults={"access_token": access_token, "target": target, "device": device},
-        )
+
+        await DatabaseConfig.objects.acreate(current_db=database, current_device=device)
+
+        # create matrix credentials for the current device if they don't exist
+        try:
+            creds = await primary_target.matrixcredentials_set.aget(device=device)
+        except MatrixCredentials.DoesNotExist:
+            creds = await MatrixCredentials.objects.acreate(
+                access_token=access_token, device=device
+            )
+            await sync_to_async(primary_target.matrixcredentials_set.add)(creds)
+
         return database
 
     def handle(self, *args, **options):

@@ -340,10 +340,40 @@ class ReplicatedModel(BaseModel):
 
             defer_replication(target)
 
-    def to_fixture(self, json: bool = False) -> Union[str, List[Dict[str, Any]]]:
+    def to_fixture(
+        self, json: bool = False, with_relations: bool = False
+    ) -> Union[str, List[Dict[str, Any]]]:
+        if not with_relations:
+            if json:
+                return serialize("json", [self])
+            return serialize("python", [self])
+
+        # collect all related objects into a list
+        relations = self._get_relationship_fields()
+        related_objects = []
+        for relation in relations:
+            if isinstance(relation, models.ForeignKey) or isinstance(
+                relation, models.OneToOneField
+            ):
+                related_obj = getattr(self, relation.name)
+                if related_obj:
+                    related_objects.append(related_obj)
+            elif isinstance(relation, models.ManyToManyField):
+                related_objs = (
+                    getattr(self, relation.name).prefetch_related().select_related().all()
+                )
+                related_objects.extend(related_objs)
+
+        # determine how to serialize the parent object
         if json:
-            return serialize("json", [self])
-        return serialize("python", [self])
+            return serialize("json", [*related_objects, self])
+        else:
+            return serialize("python", [*related_objects, self])
+
+    async def ato_fixture(
+        self, json: bool = False, with_relations: bool = False
+    ) -> Union[str, List[Dict[str, Any]]]:
+        return await sync_to_async(self.to_fixture)(json=json, with_relations=with_relations)
 
     def repr_metadata_props(self) -> Dict[str, str]:
         """
