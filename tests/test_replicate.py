@@ -58,19 +58,11 @@ async def test_replicate_init_instance_db_success(
 
     assert False, "Verify that the primary target is loaded in"
 
-<<<<<<< HEAD
-    # assert False, "Verify that a DatabaseConfig object is created"
-
-    # assert (
-    # False
-    # ), "Verify that a MatrixCredentials object is created for the current device and added to the primary_target that was loaded in"
-=======
     assert False, "Verify that a DatabaseConfig object is created"
 
     assert (
         False
     ), "Verify that a MatrixCredentials object is created for the current device and added to the primary_target that was loaded in"
->>>>>>> f4c2685f40abe2f4132fbc0af34d3b0e6a2a0912
 
 
 async def test_replicate_init_instance_db_roomgetstateeventerror_raises_commanderror():
@@ -129,68 +121,6 @@ async def test_replicate_init_instance_db_targetstate_roomgetstateeventerror_rai
             )
 
 
-<<<<<<< HEAD
-=======
-# Dont need this since the success case will run all of thi
-@pytest.mark.skip(
-    "Don't need this test since the success case (test_replicate_init_instance_db_success) will run all of this"
-)
-@pytest.mark.django_db
-@pytest.mark.asyncio
-async def test_replicate_init_instance_db_example_fixture_works_with_aget():
-    access_token = "sample_token"
-    homeserver_url = "https://homeserver.com"
-    room_id = "room_id"
-
-    # Create a real database record
-    database = await sync_to_async(Database.objects.create)(name="Test Database")
-
-    # Define a fixture dictionary with the primary key of the database record
-    fixture = {"pk": database.pk}
-
-    with patch(
-        "fractal_database.management.commands.replicate.Database.current_db",
-        side_effect=ObjectDoesNotExist,
-    ) as mock_current_db:
-        # Mock MatrixClient.room_get_state_event to raise RoomGetStateEventError
-        mock_client = MagicMock()
-        mock_client.room_get_state_event = MagicMock(
-            side_effect=RoomGetStateEventError("Error message")
-        )
-
-        # Mock json.loads
-        with patch("fractal_database.management.commands.replicate.json.loads") as mock_loads:
-            mock_loads.return_value = fixture
-            with patch(
-                "fractal_database.replication.tasks.replicate_fixture", new=AsyncMock()
-            ) as mock_replicate_fixture:
-                with patch(
-                    "fractal_database.management.commands.replicate.MatrixClient"
-                ) as mock_matrixclient:
-                    with patch(
-                        "fractal_database.management.commands.replicate.Device.objects.get_or_create"
-                    ) as mock_get_or_create:
-                        # Mock the return value of get_or_create to return a tuple
-                        mock_device = MagicMock()
-                        mock_get_or_create.return_value = (mock_device, True)
-                        mock_matrixclient.return_value = mock_client
-                        command_instance = replicate.Command()
-                        await command_instance._init_instance_db(
-                            access_token=access_token,
-                            homeserver_url=homeserver_url,
-                            room_id=room_id,
-                        )
-                        mock_get_or_create.assert_awaited_once()
-                        mock_replicate_fixture.assert_called_once_with(fixture)
-                        mock_current_db.assert_called_once()
-                        mock_matrixclient.assert_called_once_with(
-                            homeserver_url, access_token=access_token
-                        )
-                        Database.objects.aget.assert_awaited_once_with(pk=fixture["pk"])
-                        database.aprimary_target.assert_awaited_once()
-
-
->>>>>>> f4c2685f40abe2f4132fbc0af34d3b0e6a2a0912
 async def test_replicate_handle_objectdoesnotexist_raise_command_error():
     command_instance = Command()
     with patch("os.environ.get", return_value=None) as mock_get:
@@ -258,13 +188,7 @@ async def test_replicate_handle_if_primary_target_not_none():
 @pytest.mark.skip("What's being tested here?")
 @pytest.mark.django_db
 async def test_replicate_handle_current_device():
-<<<<<<< HEAD
-    target = await sync_to_async(MatrixReplicationTarget.objects.acreate)(
-=======
-
-    # FIXME: use acreate instead of create
-    target = await sync_to_async(MatrixReplicationTarget.objects.create)(
->>>>>>> f4c2685f40abe2f4132fbc0af34d3b0e6a2a0912
+    target = await MatrixReplicationTarget.objects.acreate(
         homeserver="example_homeserver_url",
         metadata={"room_id": "example_room_id"},
     )
