@@ -5,6 +5,7 @@ from fractal.matrix.utils import InvalidMatrixIdException, parse_matrix_id
 from fractal_database.controllers.fractal_database_controller import (
     FractalDatabaseController,
 )
+from nio import InviteInfo, InviteMemberEvent, InviteNameEvent
 
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 
@@ -36,15 +37,52 @@ def test_list_invites_no_pending_invites(logged_in_db_auth_controller):
     mock_isinstance.assert_not_called()
 
 
-@pytest.mark.skip(reason="need two accounts and have one send an invite to the other - just mock")
+# @pytest.mark.skip(reason="need two accounts and have one send an invite to the other - just mock")
 def test_list_invites_pending_invites(logged_in_db_auth_controller, test_room_id):
     """ """
 
     # create a FractalDatabaseController object
     controller = FractalDatabaseController()
+    room_1_member_event = MagicMock(spec=InviteMemberEvent)
+    room_1_member_event.membership = 'invite'
+    room_1_member_event.name = "name 1"
+    room_1_member_event.sender = "sender 1"
+    room_1_member_event.room_id = "room id 1"
 
-    test_matrix_id = "@admin2:localhost"
+    room_2_member_event = MagicMock(spec=InviteMemberEvent)
+    room_2_member_event.membership = 'invite'
+    room_2_member_event.name = "name 2"
+    room_2_member_event.sender = "sender 2"
+    room_2_member_event.room_id = "room id 2"
 
-    controller.invite(test_matrix_id, test_room_id, admin=True)
+    invites = {
+        "room_id_1": InviteInfo(
+            invite_state=[
+                InviteNameEvent(source={}, sender="person 1", name="Room 1"),
+                room_1_member_event,
+                room_2_member_event,
+            ]
+        )
+    }
 
-    controller.list_invites()
+    def my_side_effect(*args, **kwargs):
+        # First call returns True, second call returns False, rest of the calls return None
+        if my_side_effect.counter == 0:
+            my_side_effect.counter += 1
+            return True
+        elif my_side_effect.counter == 1:
+            my_side_effect.counter += 1
+            return False
+        else:
+            return None
+
+    # Initialize a counter attribute to keep track of calls
+    my_side_effect.counter = 0
+
+    with patch(f"{FILE_PATH}.FractalDatabaseController._list_invites", return_value=invites):
+        with patch(
+            f"{FILE_PATH}.isinstance", side_effect=my_side_effect
+        ) as mock_isinstance:
+            controller.list_invites()
+
+    mock_isinstance.assert_called()

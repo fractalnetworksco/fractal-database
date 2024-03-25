@@ -150,7 +150,6 @@ class FractalDatabaseController(AuthenticatedController):
 
             await sync_to_async(_init_instance_database)()
             return None
-
         primary_target = await database.aprimary_target()
         if not primary_target:
             raise Exception(f"Failed to find primary target for database {database}")
@@ -291,7 +290,7 @@ class FractalDatabaseController(AuthenticatedController):
 
     def _print_file_progress(
         self, transferred: int, file_size: int, monitor: TransferMonitor
-    ) -> None:
+    ) -> None: #pragma: no cover
         self.print_progress_bar(transferred, file_size, monitor=monitor)
 
     @auth_required
