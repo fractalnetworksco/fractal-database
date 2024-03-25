@@ -28,11 +28,13 @@ from nio import (
     InviteInfo,
     InviteMemberEvent,
     InviteNameEvent,
+    MessageDirection,
     RoomGetStateEventError,
     TransferMonitor,
 )
 from taskiq.receiver.receiver import Receiver
 from taskiq.result_backends.dummy import DummyResultBackend
+from taskiq_matrix.filters import create_room_message_filter, run_room_message_filter
 from taskiq_matrix.matrix_queue import Task
 
 GIT_ORG_PATH = "https://github.com/fractalnetworksco"
@@ -186,15 +188,12 @@ class FractalDatabaseController(AuthenticatedController):
 
         from fractal_database_matrix.broker import broker
 
-        # FIXME: create_filter should be moved onto the FractalAsyncClient
-        from taskiq_matrix.filters import create_room_message_filter
-
         # intialize a matrix broker in order to sync tasks.
-        broker._init_queues()
+        await broker._init_queues()
 
         # set the replication queue's checkpoint to None so that we can sync
         # from the beginning of the room
-        broker.replication_queue.checkpoint.since_token = None
+        broker.replication_queue.checkpoint.since_token = ""
         # dont need results for syncing tasks
         broker.result_backend = DummyResultBackend()  # type: ignore
         receiver = Receiver(broker=broker)
@@ -203,7 +202,13 @@ class FractalDatabaseController(AuthenticatedController):
             task_filter = create_room_message_filter(
                 room_id, types=[broker.replication_queue.task_types.task]
             )
-            tasks = await broker.replication_queue.get_tasks(timeout=0, task_filter=task_filter)
+            tasks, end = await broker.replication_queue.get_tasks_from_room(
+                room_id,
+                task_filter=task_filter,
+                start=broker.replication_queue.checkpoint.since_token,
+                end="",
+            )
+            broker.replication_queue.checkpoint.since_token = end
             print(f"Got tasks: {len(tasks)}")
             if not tasks:
                 print("No more tasks")
