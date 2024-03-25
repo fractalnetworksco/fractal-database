@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from django.core.management import call_command
 from fractal.cli.controllers.auth import AuthController
 from fractal.cli.utils import data_dir
 from fractal_database.models import Database, Device  # MatrixCredentials
@@ -65,6 +66,25 @@ def test_database(db, logged_in_db_auth_controller):
     create_database_and_matrix_replication_target()
 
     return Database.current_db()
+
+
+@pytest.fixture()
+def reset_database():
+    def flush():
+        call_command("flush", interactive=False, reset_sequences=True)
+
+    return flush
+
+
+@pytest.fixture()
+def instance_database_room(test_database, reset_database) -> str:
+    target = test_database.primary_target()
+    room_id = target.metadata["room_id"]
+
+    # clear the database so that we can load data from the above room_id
+    reset_database()
+
+    return room_id
 
 
 @pytest.fixture(scope="function")
