@@ -47,18 +47,50 @@ def test_build_no_fractal_app(temp_directory):
 
 def test_build_fail_to_connect_to_docker(temp_directory_with_pyproject):
     """
-    #? pyproject exists and looks right, not passing the get_fractal_app function call
     """
-
-    assert os.path.exists(os.path.join(temp_directory_with_pyproject, 'pyproject.toml'))
-    with open(f"{temp_directory_with_pyproject}/pyproject.toml", 'r') as f:
-        contents = f.read()
-        print('here============', contents)
 
     # create a FractalDatabaseController object
     controller = FractalDatabaseController()
 
+    # pyproject = {
+    #     "tool": {
+    #         "fractal": {
+    #             "namespace": "test_project_name"
+    #         }
+    #     }
+    # }
+
+    controller._get_fractal_app = MagicMock()
+
     with patch(f"{FILE_PATH}.docker.from_env", side_effect=Exception) as mock_from_env:
-        # with pytest.raises(SystemExit):
-        controller._build(name='test_project_name')
+        with pytest.raises(SystemExit):
+            controller._build(name='test_project_name')
+
+
+def test_build_fractal_base_image():
+    """
+    """
+
+    # create a FractalDatabaseController object
+    controller = FractalDatabaseController()
+
+    controller._get_fractal_app = MagicMock()
+
+    mock_docker = MagicMock()
+    mock_docker.images.list.return_value = []
+    #! ================give a return value that triggers line in response==========================
+    # ! mock_docker.api.build = MagicMock(return_value=)
+
+    with patch(f"{FILE_PATH}.FractalDatabaseController.build_base") as mock_build_base:
+        with patch(f"{FILE_PATH}.docker.from_env", return_value=mock_docker):
+            controller._build(name='test_project_name', verbose=True)
+
+    mock_build_base.assert_called_once()
+
+
+    
+
+
+
+
 

@@ -42,25 +42,37 @@ def test_verify_repos_cloned_wrong_directory_given():
         assert False
 
 
-def test_verify_repos_cloned_nonexistant_project():
+def test_verify_repos_cloned_missing_project(temp_directory):
     """ """
 
     # create a FractalDatabaseController object
     controller = FractalDatabaseController()
 
-    projects_with_one_nonexistant_project = [
+    original_dir = os.getcwd()
+
+    try:
+        os.chdir(temp_directory)
+    except:
+        raise
+
+    projects_with_one_missing_project = [
         "fractal-database-matrix",
         "fractal-database",
         "taskiq-matrix",
         "fractal-matrix-client",
         "fractal-gateway-v2",
-        "test-project-that-doesnt-exist", # insert a project that doesnt exist
     ]
 
-    with patch(
-        f"{FILE_PATH}.FractalDatabaseController._verify_repos_cloned.projects",
-        new=projects_with_one_nonexistant_project,
-    ):
-        assert not controller._verify_repos_cloned(os.path.dirname(os.getcwd()))
+    for project in projects_with_one_missing_project:
+        os.makedirs(project, exist_ok=True)
 
-    
+    assert controller._verify_repos_cloned(temp_directory)
+
+    try:
+        os.rmdir(projects_with_one_missing_project[0])
+    except:
+        raise
+
+    assert not controller._verify_repos_cloned(os.path.dirname(os.getcwd()))
+
+    os.chdir(original_dir)

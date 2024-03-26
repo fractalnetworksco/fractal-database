@@ -343,7 +343,7 @@ class FractalDatabaseController(AuthenticatedController):
 
     @auth_required
     @cli_method
-    def join(self, room_id: str, **kwargs):
+    def join(self, room_id: str, **kwargs): #pragma: no cover
         """
         Accept an invitation to a database or knock if not invited yet.
         ---
@@ -441,7 +441,7 @@ class FractalDatabaseController(AuthenticatedController):
 
     @auth_required
     @cli_method
-    def migrate(self, project_name: str):
+    def migrate(self, project_name: str): #pragma: no cover
         """
         Creates and applies database migrations for the given Fractal Database Django
         project

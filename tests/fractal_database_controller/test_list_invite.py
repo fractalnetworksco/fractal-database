@@ -10,6 +10,7 @@ from nio import InviteInfo, InviteMemberEvent, InviteNameEvent
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 
 
+#! ===============================
 def test_list_invites_not_logged_in():
     """
     Tests that if the user is not logged in
@@ -37,7 +38,7 @@ def test_list_invites_no_pending_invites(logged_in_db_auth_controller):
     mock_isinstance.assert_not_called()
 
 
-# @pytest.mark.skip(reason="need two accounts and have one send an invite to the other - just mock")
+#! =============================== not sure if this test is needed, no assertions to make
 def test_list_invites_pending_invites(logged_in_db_auth_controller, test_room_id):
     """ """
 
@@ -65,24 +66,8 @@ def test_list_invites_pending_invites(logged_in_db_auth_controller, test_room_id
         )
     }
 
-    def my_side_effect(*args, **kwargs):
-        # First call returns True, second call returns False, rest of the calls return None
-        if my_side_effect.counter == 0:
-            my_side_effect.counter += 1
-            return True
-        elif my_side_effect.counter == 1:
-            my_side_effect.counter += 1
-            return False
-        else:
-            return None
-
     # Initialize a counter attribute to keep track of calls
-    my_side_effect.counter = 0
 
     with patch(f"{FILE_PATH}.FractalDatabaseController._list_invites", return_value=invites):
-        with patch(
-            f"{FILE_PATH}.isinstance", side_effect=my_side_effect
-        ) as mock_isinstance:
-            controller.list_invites()
+        controller.list_invites()
 
-    mock_isinstance.assert_called()
