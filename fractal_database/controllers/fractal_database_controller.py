@@ -189,7 +189,7 @@ class FractalDatabaseController(AuthenticatedController):
         from fractal_database_matrix.broker import broker
 
         # intialize a matrix broker in order to sync tasks.
-        await broker._init_queues()
+        broker._init_queues()
 
         # set the replication queue's checkpoint to None so that we can sync
         # from the beginning of the room
