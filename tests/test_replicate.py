@@ -8,11 +8,16 @@ from fractal_database.management.commands.replicate import (
     Command,
     CommandError,
     Database,
+    DatabaseConfig,
+    Device,
+    MatrixClient,
     MatrixCredentials,
     MatrixReplicationTarget,
     ObjectDoesNotExist,
     RoomGetStateEventError,
+    os,
 )
+from nio.responses import RoomGetStateEventResponse
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -56,69 +61,58 @@ async def test_replicate_init_instance_db_success(
     current_database = await Database.acurrent_db()
     assert current_database == loaded_database
 
-    assert False, "Verify that the primary target is loaded in"
+    current_device = await Device.acurrent_device()
+    target = await current_database.aprimary_target()
 
-    assert False, "Verify that a DatabaseConfig object is created"
+    assert isinstance(target, MatrixReplicationTarget)
 
+    assert await DatabaseConfig.objects.aexists()
+
+    assert await current_device.matrixcredentials_set.aexists()
     assert (
-        False
-    ), "Verify that a MatrixCredentials object is created for the current device and added to the primary_target that was loaded in"
+        await current_device.matrixcredentials_set.aexists()
+        == await target.matrixcredentials_set.aexists()
+    )
 
 
-async def test_replicate_init_instance_db_roomgetstateeventerror_raises_commanderror():
-    access_token = "sample_token"
-    homeserver_url = "https://homeserver.com"
-    room_id = "room_id"
+async def test_replicate_init_instance_db_roomgetstateeventerror_raises_commanderror(
+    instance_database_room, test_user_access_token, test_homeserver_url
+):
+    room_id = instance_database_room
+
+    command_instance = Command()
+
     with patch(
-        "fractal_database.management.commands.replicate.Database.acurrent_db",
-        side_effect=ObjectDoesNotExist,
-    ) as mock_acurrent:
-        mock_client_instance = AsyncMock()
-        mock_client_instance.room_get_state_event = AsyncMock(side_effect=RoomGetStateEventError)
-        with patch(
-            "fractal_database.management.commands.replicate.MatrixClient"
-        ) as mock_matrix_client:
-            mock_matrix_client.return_value.__aenter__.return_value = mock_client_instance
-            command_instance = Command()
-            with pytest.raises(CommandError) as e:
-                await command_instance._init_instance_db(access_token, homeserver_url, room_id)
-            assert str(e.value) == "Failed to get database configuration from room state: room_id"
-            mock_acurrent.assert_called_once
-            mock_client_instance.room_get_state_event.assert_called_once_with(
-                room_id, "f.database"
+        "nio.client.async_client.AsyncClient.room_get_state_event",
+        side_effect=[RoomGetStateEventError("Error message")],
+    ):
+        with pytest.raises(CommandError) as e:
+            await command_instance._init_instance_db(
+                test_user_access_token, test_homeserver_url, room_id
             )
+    assert "Failed to get database configuration from room state: Error message" in str(e.value)
 
 
-async def test_replicate_init_instance_db_targetstate_roomgetstateeventerror_raises_commanderror():
-    access_token = "sample_token"
-    homeserver_url = "https://homeserver.com"
-    room_id = "room_id"
+async def test_replicate_init_instance_db_targetstate_roomgetstateeventerror_raises_commanderror(
+    instance_database_room, test_user_access_token, test_homeserver_url
+):
+    room_id = instance_database_room
+
+    command_instance = Command()
+
     with patch(
-        "fractal_database.management.commands.replicate.Database.acurrent_db",
-        side_effect=ObjectDoesNotExist,
-    ) as mock_acurrent:
-        mock_client_instance = AsyncMock()
-        mock_client_instance.room_get_state_event = AsyncMock()
-        # Define side_effect to raise RoomGetStateEventError only for the second call
-        mock_client_instance.room_get_state_event.side_effect = [
-            {},  # This is the response for the first call
-            RoomGetStateEventError("Error message"),  # This raises an error for the second call
-        ]
-        with patch(
-            "fractal_database.management.commands.replicate.MatrixClient"
-        ) as mock_matrix_client:
-            mock_matrix_client.return_value.__aenter__.return_value = mock_client_instance
-            command_instance = Command()
-            with pytest.raises(CommandError) as e:
-                await command_instance._init_instance_db(access_token, homeserver_url, room_id)
-            assert (
-                str(e.value)
-                == "Failed to get database configuration from room state: Error message"
+        "nio.client.async_client.AsyncClient.room_get_state_event",
+        side_effect=[
+            {"content": {"fixture": "valid_db_fixture"}},
+            RoomGetStateEventError("Error message"),
+        ],
+    ):
+        with pytest.raises(CommandError) as e:
+            await command_instance._init_instance_db(
+                test_user_access_token, test_homeserver_url, room_id
             )
-            mock_acurrent.assert_called_once
-            mock_client_instance.room_get_state_event.assert_called_with(
-                room_id, "f.database.target"
-            )
+
+    assert "Failed to get database configuration from room state: Error message" in str(e.value)
 
 
 async def test_replicate_handle_objectdoesnotexist_raise_command_error():
@@ -127,21 +121,7 @@ async def test_replicate_handle_objectdoesnotexist_raise_command_error():
         with patch(
             "fractal_database.management.commands.replicate.Database.current_db",
             side_effect=ObjectDoesNotExist,
-        ) as mock_current_db:
-            with pytest.raises(CommandError) as e:
-                await sync_to_async(command_instance.handle)()
-            assert "No current database configured. Have you applied migrations?" in str(e.value)
-
-
-@pytest.mark.skip("Duplicate to the test above?")
-async def test_replicate_handle_if_current_db_raises_object_does_not_exist():
-    # Test scenario where current_db raises ObjectDoesNotExist
-    mock_current_db = MagicMock(side_effect=ObjectDoesNotExist)
-    with patch("os.environ.get", return_value=None) as mock_get:
-        with patch(
-            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
         ):
-            command_instance = Command()
             with pytest.raises(CommandError) as e:
                 await sync_to_async(command_instance.handle)()
             assert "No current database configured. Have you applied migrations?" in str(e.value)
@@ -205,25 +185,32 @@ async def test_replicate_handle_current_device():
             await sync_to_async(command_instance.handle)()
 
 
-@pytest.mark.skip("Infinite loop. Need to patch os.execve")
+# @pytest.mark.skip("Working on testing with actual database")
 @pytest.mark.django_db
-async def test_replicate_handle_works_correctly():
-    # Mock the primary target and database
-    mock_target = MagicMock(spec=MatrixReplicationTarget)
-    mock_primary_target = MagicMock(return_value=mock_target)
-    mock_database = MagicMock()
-    mock_database.primary_target = mock_primary_target
+async def test_replicate_handle_method(instance_database_room):
+    os.environ["MATRIX_ROOM_ID"] = instance_database_room
 
-    mock_current_db = MagicMock(return_value=mock_database)
-    mock_current_device = MagicMock(return_value="current_device")
+    database = MagicMock(spec=Database)
+    database.primary_target.return_value = MagicMock(spec=Device)
+    Database.objects.create.return_value = database
 
-    with patch("os.environ.get", return_value=None) as mock_get:
-        with patch(
-            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
-        ):
-            with patch("fractal_database.models.Device.current_device", mock_current_device):
-                command_instance = Command()
-                await sync_to_async(command_instance.handle)()
+    mock_device = MagicMock(spec=Device)
+    mock_device.matrixcredentials_set.get().access_token = "test_access_token"
+    mock_current_device = MagicMock(return_value=mock_device)
+
+    with patch(
+        "fractal_database.management.commands.replicate.Device.current_device",
+        mock_current_device,
+    ):
+        with patch("os.environ.get", return_value=None):
+            with patch("os.execve"):
+                command_instance = replicate.Command()
+                command_instance.handle()
+
+    mock_device.matrixcredentials_set.get.assert_called_once_with(device=mock_device)
+    mock_current_device.assert_called_once()
+    Database.objects.create.assert_called_once()
+    database.primary_target.assert_called_once()
 
 
 async def test_replicate_handle_if_primary_target_not_none_keyerror():
@@ -240,7 +227,7 @@ async def test_replicate_handle_if_primary_target_not_none_keyerror():
             assert isinstance(e.value.__cause__, KeyError)
 
 
-@pytest.mark.skip("Infinite Loop - Need to patch os.execve")
+# @pytest.mark.skip("Infinite Loop - Need to patch os.execve")
 async def test_replicate_handle_with_env_set():
     mock_target = MagicMock(spec=MatrixReplicationTarget)
 
@@ -258,9 +245,10 @@ async def test_replicate_handle_with_env_set():
             with patch(
                 "fractal_database.management.commands.replicate.Command._init_instance_db"
             ) as mock_instance_db:
-                command_instance = Command()
-                await sync_to_async(command_instance.handle)()
-                mock_current_db.assert_not_called()  # Ensure current_db is not called when env variables are set
+                with patch("os.execve"):
+                    command_instance = Command()
+                    await sync_to_async(command_instance.handle)()
+                    mock_current_db.assert_not_called()  # Ensure current_db is not called when env variables are set
 
 
 @pytest.mark.skip("Infinite Loop. Need to patch os.execve")
