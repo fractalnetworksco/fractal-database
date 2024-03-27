@@ -115,6 +115,29 @@ async def test_replicate_init_instance_db_targetstate_roomgetstateeventerror_rai
     assert "Failed to get database configuration from room state: Error message" in str(e.value)
 
 
+@pytest.mark.skip("Working on. Trouble reaching end of first half of handle")
+async def test_replicate_handle_no_matrix_room_id_success(
+    instance_database_room, test_user_access_token, test_homeserver_url
+):
+    room_id = instance_database_room
+    command_instance = replicate.Command()
+
+    loaded_database = await command_instance._init_instance_db(
+        test_user_access_token, test_homeserver_url, room_id
+    )
+
+    current_database = await Database.acurrent_db()
+    assert current_database == loaded_database
+
+    # current_device = await Device.acurrent_device()
+    target = await current_database.aprimary_target()
+
+    assert isinstance(target, MatrixReplicationTarget)
+
+    with patch("fractal_database.management.commands.replicate.get") as mock_get:
+        await sync_to_async(command_instance.handle)()
+
+
 async def test_replicate_handle_objectdoesnotexist_raise_command_error():
     command_instance = Command()
     with patch("os.environ.get", return_value=None) as mock_get:
@@ -145,7 +168,7 @@ async def test_replicate_handle_if_current_db_returns_valid_database_with_no_tar
             )
 
 
-async def test_replicate_handle_if_primary_target_not_none():
+async def test_replicate_handle_if_primary_target_not_matrixreplicationtarget():
     mock_primary_target = MagicMock(return_value="MockReplicationTarget")
 
     mock_database = MagicMock()
@@ -165,130 +188,71 @@ async def test_replicate_handle_if_primary_target_not_none():
             )
 
 
-@pytest.mark.skip("What's being tested here?")
-@pytest.mark.django_db
-async def test_replicate_handle_current_device():
-    target = await MatrixReplicationTarget.objects.acreate(
-        homeserver="example_homeserver_url",
-        metadata={"room_id": "example_room_id"},
+async def test_replicate_handle_method_if_matrix_room_id(
+    instance_database_room, test_user_access_token, test_homeserver_url
+):
+    room_id = instance_database_room
+    command_instance = replicate.Command()
+
+    loaded_database = await command_instance._init_instance_db(
+        test_user_access_token, test_homeserver_url, room_id
     )
 
-    mock_database = MagicMock()
-    mock_database.primary_target = target
-    mock_current_db = MagicMock(return_value=mock_database)
+    current_database = await Database.acurrent_db()
+    assert current_database == loaded_database
 
-    with patch("os.environ.get", return_value=None) as mock_get:
-        with patch(
-            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
-        ):
-            command_instance = Command()
-            await sync_to_async(command_instance.handle)()
+    current_device = await Device.acurrent_device()
+    target = await current_database.aprimary_target()
 
+    assert isinstance(target, MatrixReplicationTarget)
 
-# @pytest.mark.skip("Working on testing with actual database")
-@pytest.mark.django_db
-async def test_replicate_handle_method(instance_database_room):
-    os.environ["MATRIX_ROOM_ID"] = instance_database_room
-
-    database = MagicMock(spec=Database)
-    database.primary_target.return_value = MagicMock(spec=Device)
-    Database.objects.create.return_value = database
-
-    mock_device = MagicMock(spec=Device)
-    mock_device.matrixcredentials_set.get().access_token = "test_access_token"
-    mock_current_device = MagicMock(return_value=mock_device)
+    os.environ["MATRIX_ROOM_ID"] = room_id
+    os.environ["MATRIX_ACCESS_TOKEN"] = test_user_access_token
+    os.environ["MATRIX_HOMESERVER_URL"] = test_homeserver_url
 
     with patch(
         "fractal_database.management.commands.replicate.Device.current_device",
-        mock_current_device,
+        return_value=current_device,
     ):
-        with patch("os.environ.get", return_value=None):
+        with patch("os.environ.get"):
             with patch("os.execve"):
-                command_instance = replicate.Command()
-                command_instance.handle()
-
-    mock_device.matrixcredentials_set.get.assert_called_once_with(device=mock_device)
-    mock_current_device.assert_called_once()
-    Database.objects.create.assert_called_once()
-    database.primary_target.assert_called_once()
-
-
-async def test_replicate_handle_if_primary_target_not_none_keyerror():
-    mock_current_db = MagicMock(side_effect=ObjectDoesNotExist)
-    mock_environ = {"MATRIX_ROOM_ID": "test_room_id", "MATRIX_ACCESS_TOKEN": "test_access_token"}
-    with patch("os.environ", mock_environ):
-        with patch(
-            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
-        ):
-            command_instance = Command()
-            with pytest.raises(CommandError) as e:
                 await sync_to_async(command_instance.handle)()
-            assert "Missing environment variable 'MATRIX_HOMESERVER_URL'" in str(e.value)
-            assert isinstance(e.value.__cause__, KeyError)
+    assert os.environ.get("MATRIX_ROOM_ID") == room_id
+    assert os.environ.get("MATRIX_ACCESS_TOKEN") == test_user_access_token
+    assert os.environ.get("MATRIX_HOMESERVER_URL") == test_homeserver_url
 
 
-# @pytest.mark.skip("Infinite Loop - Need to patch os.execve")
-async def test_replicate_handle_with_env_set():
-    mock_target = MagicMock(spec=MatrixReplicationTarget)
+async def test_replicate_handle_if_primary_target_not_none_keyerror(
+    instance_database_room, test_user_access_token, test_homeserver_url
+):
+    room_id = instance_database_room
+    command_instance = replicate.Command()
 
-    mock_environ = {
-        "MATRIX_ROOM_ID": "test_room_id",
-        "MATRIX_ACCESS_TOKEN": "test_access_token",
-        "MATRIX_HOMESERVER_URL": "test_homeserver_url",
-    }
+    loaded_database = await command_instance._init_instance_db(
+        test_user_access_token, test_homeserver_url, room_id
+    )
 
-    with patch("os.environ", mock_environ):
-        with patch(
-            "fractal_database.management.commands.replicate.Database.current_db",
-            return_value=mock_target,
-        ) as mock_current_db:
-            with patch(
-                "fractal_database.management.commands.replicate.Command._init_instance_db"
-            ) as mock_instance_db:
-                with patch("os.execve"):
-                    command_instance = Command()
-                    await sync_to_async(command_instance.handle)()
-                    mock_current_db.assert_not_called()  # Ensure current_db is not called when env variables are set
+    current_database = await Database.acurrent_db()
+    assert current_database == loaded_database
 
+    current_device = await Device.acurrent_device()
+    target = await current_database.aprimary_target()
 
-@pytest.mark.skip("Infinite Loop. Need to patch os.execve")
-@pytest.mark.asyncio
-async def test_replicate_handle_if_primary_target_not_none_works():
+    assert isinstance(target, MatrixReplicationTarget)
+
+    os.environ["MATRIX_ROOM_ID"] = room_id
+    del os.environ["MATRIX_ACCESS_TOKEN"]
+    os.environ["MATRIX_HOMESERVER_URL"] = test_homeserver_url
+
     with patch(
-        "fractal_database.management.commands.replicate.Database.current_db",
-        side_effect=ObjectDoesNotExist,
-    ) as mock_current_db:
-        mock_environ = {
-            "MATRIX_ROOM_ID": "test_room_id",
-            "MATRIX_ACCESS_TOKEN": "test_access_token",
-            "MATRIX_HOMESERVER_URL": "test_homeserver_url",
-        }
-        with patch("os.environ", mock_environ):
-            with patch(
-                "fractal_database.management.commands.replicate.Command._init_instance_db"
-            ) as mock_init_instance_db:
-                command_instance = Command()
-                await sync_to_async(command_instance.handle)()
-                mock_current_db.assert_called_once()
-                mock_init_instance_db.assert_called_once_with(
-                    "test_access_token", "test_homeserver_url", "test_room_id"
+        "fractal_database.management.commands.replicate.Device.current_device",
+        return_value=current_device,
+    ):
+        with patch("os.environ.get"):
+            with patch("os.execve"):
+                with pytest.raises(CommandError) as e:
+                    await sync_to_async(command_instance.handle)()
+                assert (
+                    f"Missing environment variable 'MATRIX_ACCESS_TOKEN'. Have you configured the MatrixReplicationTarget?"
+                    in str(e.value)
                 )
-
-
-@pytest.mark.skip("Infinite Loop. Need to patch os.execve")
-async def test_replicate_handle_python_path():
-    mock_current_db = MagicMock(side_effect=ObjectDoesNotExist)
-    mock_environ = {
-        "MATRIX_ROOM_ID": "test_room_id",
-        "MATRIX_ACCESS_TOKEN": "test_access_token",
-        "MATRIX_HOMESERVER_URL": "test_homeserver_url",
-    }
-    with patch("os.environ", mock_environ):
-        with patch(
-            "fractal_database.management.commands.replicate.Database.current_db", mock_current_db
-        ):
-            with patch(
-                "fractal_database.management.commands.replicate.Command._init_instance_db"
-            ):
-                command_instance = Command()
-                await sync_to_async(command_instance.handle)()
