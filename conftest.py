@@ -1,9 +1,11 @@
 import asyncio
+import docker
 import tempfile
 import json
 import os
 import secrets
 import shutil
+from django.core.management import call_command
 from typing import Awaitable, Callable, Generator
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -28,6 +30,8 @@ except KeyError as e:
     raise Exception(
         f"Please run prepare-test.py first, then source the generated environment file: {e}"
     )
+
+TEST_DIR = os.path.dirname(__file__)
 
 
 @pytest.fixture
@@ -63,7 +67,7 @@ def logged_in_db_auth_controller(test_homeserver_url, test_matrix_id):
 
 
 @pytest.fixture(scope="function")
-def test_database(db, logged_in_db_auth_controller):
+def test_database(transactional_db, logged_in_db_auth_controller):
     """ """
 
     from fractal_database.signals import create_database_and_matrix_replication_target
@@ -74,7 +78,7 @@ def test_database(db, logged_in_db_auth_controller):
 
 
 @pytest.fixture(scope="function")
-def test_device(db, test_database):
+def test_device(transactional_db, test_database):
     """ """
     unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
 
@@ -82,7 +86,7 @@ def test_device(db, test_database):
 
 
 @pytest.fixture(scope="function")
-def second_test_device(db, test_database):
+def second_test_device(transactional_db, test_database):
     """ """
     unique_id = f"test-device-{secrets.token_hex(8)[:4]}"
 
@@ -115,6 +119,14 @@ def cleanup():
     except FileNotFoundError:
         pass
 
+    try:
+        #remove docker image
+        print()
+    except:
+        pass
+
+    os.chdir(TEST_DIR)
+
 
 @pytest.fixture(scope="function")
 def test_yaml_dict():
@@ -139,6 +151,10 @@ def _use_django(test_database, test_yaml_dict):
     assert os.path.exists(os.path.join(data_dir, "projects.yaml"))
 
     os.environ["FRACTAL_PROJECT_NAME"] = test_yaml_dict["test_project"]
+
+    yield 
+
+    del os.environ['FRACTAL_PROJECT_NAME']
 
 @pytest.fixture(scope="function")
 def matrix_client() -> Generator[FractalAsyncClient, None, None]:
@@ -230,11 +246,18 @@ def temp_directory():
 
 @pytest.fixture
 def temp_directory_with_pyproject(temp_directory):
-    current_dir = os.getcwd()
 
     try:
         os.chdir(temp_directory)
         init_poetry_project('test_project_name')
-        os.chdir(current_dir)
-    finally:
         yield temp_directory
+    finally:
+        os.chdir(TEST_DIR)
+
+
+@pytest.fixture()
+def reset_database():
+    def flush():
+        call_command("flush", interactive=False, reset_sequences=True)
+
+    return flush

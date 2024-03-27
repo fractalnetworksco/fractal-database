@@ -13,6 +13,7 @@ from fractal_database.controllers.fractal_database_controller import (
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 FRACTAL_PATH = "fractal.matrix.FractalAsyncClient"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_clone_environ_source_dir_used():
@@ -41,16 +42,9 @@ def test_clone_environ_source_not_used(temp_directory):
     controller = FractalDatabaseController()
 
     with patch.dict(os.environ, {'FRACTAL_SOURCE_DIR': temp_directory}):
-        with patch(f"{FILE_PATH}.subprocess.run") as mock_run:
-            controller.clone()
+        controller.clone()
 
-
-    assert temp_directory != os.environ.get('FRACTAL_SOURCE_DIR')
-    args = mock_run.call_args_list
-
-    for arg in args:
-        assert temp_directory in str(arg)
-        assert DEFAULT_FRACTAL_SRC_DIR in str(arg)
+    assert len(os.listdir(temp_directory)) == 6
 
 
 def test_clone_fail_to_clone():

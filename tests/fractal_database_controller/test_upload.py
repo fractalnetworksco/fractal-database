@@ -79,7 +79,7 @@ def test_upload_fail_to_upload(logged_in_db_auth_controller, temp_directory_with
     except:
         raise
 
-    with patch(f"{FILE_PATH}.asyncio.run", side_effect=Exception) as mock_asyncio:
+    with patch(f"asyncio.run", side_effect=Exception) as mock_asyncio:
         with pytest.raises(SystemExit):
             result = controller.upload('pyproject.toml', False)
 

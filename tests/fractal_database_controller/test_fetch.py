@@ -16,6 +16,7 @@ from fractal_database_matrix.models import MatrixReplicationTarget
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 FRACTAL_PATH = "fractal.matrix.FractalAsyncClient"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class NotMatrixReplicationTarget:

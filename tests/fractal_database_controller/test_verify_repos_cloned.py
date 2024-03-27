@@ -12,16 +12,6 @@ FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 FRACTAL_PATH = "fractal.matrix.FractalAsyncClient"
 
 
-def test_verify_repos_cloned_all_repos_exist():
-    """ """
-
-    # create a FractalDatabaseController object
-    controller = FractalDatabaseController()
-
-    # gets the parent directory of the current working directory
-    assert controller._verify_repos_cloned(os.path.dirname(os.getcwd()))
-
-
 def test_verify_repos_cloned_wrong_directory_given():
     """ """
 

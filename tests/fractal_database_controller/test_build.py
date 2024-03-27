@@ -15,6 +15,7 @@ from fractal_database.controllers.fractal_database_controller import (
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 FRACTAL_PATH = "fractal.matrix.FractalAsyncClient"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
+pytestmark = pytest.mark.django_db(transaction=True)
 
 #! NOT FINISHED
 
@@ -78,14 +79,20 @@ def test_build_fractal_base_image():
 
     mock_docker = MagicMock()
     mock_docker.images.list.return_value = []
-    #! ================give a return value that triggers line in response==========================
-    # ! mock_docker.api.build = MagicMock(return_value=)
+    response = [
+        {"stream": "This is a stream message 1\n"},
+        {"stream": "This is a stream message 2\n"},
+        {"other_key": "This is another key"},
+        {"stream": "This is a stream message 3\n"},
+    ]
+    mock_docker.api.build = MagicMock(return_value=response)
 
     with patch(f"{FILE_PATH}.FractalDatabaseController.build_base") as mock_build_base:
         with patch(f"{FILE_PATH}.docker.from_env", return_value=mock_docker):
             controller._build(name='test_project_name', verbose=True)
 
     mock_build_base.assert_called_once()
+    mock_docker.api.build.assert_called()
 
 
     

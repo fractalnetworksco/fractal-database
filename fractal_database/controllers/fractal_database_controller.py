@@ -994,7 +994,7 @@ RUN fractal db init --app {name} --project-name {project_name}_app --no-migrate
     @use_django
     @auth_required
     @cli_method
-    def device_add(self, device_name: str, database_name: str, **kwargs): #pragma: no cover
+    def device_add(self, device_name: str, database_name: str, **kwargs): 
         """
         Adds a device to a database.
         ---

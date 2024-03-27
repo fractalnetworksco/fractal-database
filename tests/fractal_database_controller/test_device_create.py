@@ -17,6 +17,7 @@ from fractal_database.models import Device
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 FRACTAL_PATH = "fractal.matrix.FractalAsyncClient"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_device_create_use_socket_name(_use_django, logged_in_db_auth_controller):

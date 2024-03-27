@@ -388,7 +388,7 @@ def create_database_and_matrix_replication_target(*args, **kwargs) -> None:
         },
     )
 
-    device_name = f"{socket.gethostname()}_{token_hex(4)}".lower()
+    device_name = f"{socket.gethostname()}_{token_hex(8)}".lower()
     logger.info("Ensuring this physical device (%s) is created" % socket.gethostname())
     device, device_created = Device.objects.get_or_create(
         name=device_name,

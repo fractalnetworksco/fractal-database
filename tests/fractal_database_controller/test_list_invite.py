@@ -8,6 +8,7 @@ from fractal_database.controllers.fractal_database_controller import (
 from nio import InviteInfo, InviteMemberEvent, InviteNameEvent
 
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 #! ===============================

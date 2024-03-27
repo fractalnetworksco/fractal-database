@@ -46,7 +46,6 @@ async def test_sync_data_with_tasks(test_matrix_broker, test_multiple_broker_mes
     controller = FractalDatabaseController()
 
     test_broker: MatrixBroker = await test_matrix_broker()
-    test_broker._init_queues = MagicMock()
 
     num_tasks = 5
 
@@ -67,7 +66,7 @@ async def test_sync_data_with_tasks(test_matrix_broker, test_multiple_broker_mes
 
     test_broker.replication_queue.get_tasks = AsyncMock(side_effect=[returned_tasks, []])
 
-    test_broker.replication_queue.yield_task = AsyncMock(spec=AckableMessage)
+    test_broker.replication_queue.yield_task = AsyncMock(return_value=MagicMock(spec=AckableMessage))
 
     with patch("fractal_database_matrix.broker.broker", test_broker):
 

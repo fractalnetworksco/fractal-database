@@ -670,7 +670,6 @@ def test_signals_create_database_and_matrix_replication_target_with_creds(
 
     # save the project name
     db_project_name = os.path.basename(settings.BASE_DIR)
-    from fractal_database.signals import get_deferred_replications
 
     # call the function
     create_database_and_matrix_replication_target()

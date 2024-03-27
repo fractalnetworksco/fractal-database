@@ -14,6 +14,7 @@ from fractal_database.controllers.fractal_database_controller import (
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
 FRACTAL_PATH = "fractal.matrix.FractalAsyncClient"
 DEFAULT_FRACTAL_SRC_DIR = os.path.join(data_dir, "src")
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_get_fractal_app_filenotfound():

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from fractal.matrix.utils import parse_matrix_id, InvalidMatrixIdException
 
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
+pytestmark = pytest.mark.django_db(transaction=True)
 
 def test_invite_not_admin(logged_in_db_auth_controller):
     """

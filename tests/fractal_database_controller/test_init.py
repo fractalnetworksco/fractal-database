@@ -10,6 +10,7 @@ from fractal_database.controllers.fractal_database_controller import (
 )
 
 FILE_PATH = "fractal_database.controllers.fractal_database_controller"
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_init_no_access_token_no_nomigrate():

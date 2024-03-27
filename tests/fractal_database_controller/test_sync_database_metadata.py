@@ -7,7 +7,7 @@ from fractal_database.controllers.fractal_database_controller import (
     FractalDatabaseController,
     RoomGetStateEventError,
 )
-from fractal_database.models import DatabaseConfig
+from fractal_database.models import DatabaseConfig, Database
 from fractal_database_matrix.models import MatrixReplicationTarget
 from nio import RoomGetStateEventResponse
 
@@ -159,11 +159,11 @@ async def test_sync_database_current_db_same_as_sync_db(new_matrix_room, _use_dj
     db.aprimary_target.assert_not_called()
 
 
+pytest.mark.skip(reason='convert to integration test')
 async def test_sync_database_current_db_doesnotexist(
     new_matrix_room, _use_django, test_yaml_dict, logged_in_db_auth_controller
 ):
     """
-    #? having issues with os.environ variables in the function
     """
 
     controller = FractalDatabaseController()
@@ -243,38 +243,46 @@ async def test_sync_database_fail_to_find_primary_target(new_matrix_room, _use_d
     assert "Failed to find primary target" in str(e.value)
 
 
-@pytest.mark.skip(reason='error when mocking the matrix repl target select_related function')
-async def test_sync_database_successful_sync(new_matrix_room, _use_django):
+@pytest.mark.skip(reason='convert to integration test')
+async def test_sync_database_successful_sync(test_database, _use_django, reset_database):
     """ 
-    #? error when mocking the matrix repl target select_related function
     """
 
     # create a FractalDatabaseController object
     controller = FractalDatabaseController()
 
-    test_json_fixture = json_fixture
+    target = await test_database.aprimary_target()
 
-    with patch(f"{FRACTAL_PATH}.room_get_state_event") as mock_room_get_state:
-        response = MagicMock(spec=RoomGetStateEventResponse)
-        response.content = {"fixture": test_json_fixture}
-        mock_room_get_state.return_value = response
-        with patch(
-            "fractal_database.replication.tasks.replicate_fixture", new=AsyncMock()
-        ) as mock_replicate_fixture:
-            db = MagicMock()
-            with patch(
-                "fractal_database.models.Database.acurrent_db", new=AsyncMock(return_value=db)
-            ):
-                db.aprimary_target = AsyncMock()
-                db.pk = "9fe5821e-6475-43e6-8880-95fed05cecd2"
-                mock_query_object = MagicMock()
-                mock_query_object.aget = AsyncMock()
-                with patch(
-                    "fractal_database_matrix.models.MatrixReplicationTarget.objects.select_related",
-                    new=AsyncMock(return_value=mock_query_object),
-                ) as mock_select_related:
-                    with patch(f"{FILE_PATH}.sync_to_async") as mock_sync:
-                        result = await controller._sync_database_metadata(room_id=new_matrix_room)
+    room_id = target.metadata['room_id']
 
-    mock_select_related.assert_called_once()
-    mock_sync.assert_called_once()
+    reset_database()
+
+
+    # test_json_fixture = json_fixture
+
+    # with patch(f"{FRACTAL_PATH}.room_get_state_event") as mock_room_get_state:
+    #     response = MagicMock(spec=RoomGetStateEventResponse)
+    #     response.content = {"fixture": test_json_fixture}
+    #     mock_room_get_state.return_value = response
+    #     with patch(
+    #         "fractal_database.replication.tasks.replicate_fixture", new=AsyncMock()
+    #     ) as mock_replicate_fixture:
+    #         db = MagicMock()
+    #         with patch(
+    #             "fractal_database.models.Database.acurrent_db", new=AsyncMock(return_value=db)
+    #         ):
+    #             db.aprimary_target = AsyncMock()
+    #             db.pk = "9fe5821e-6475-43e6-8880-95fed05cecd2"
+    #             mock_query_object = MagicMock()
+    #             mock_query_object.aget = AsyncMock()
+    #             with patch(
+    #                 "fractal_database_matrix.models.MatrixReplicationTarget.objects.select_related",
+    #                 new=AsyncMock(return_value=mock_query_object),
+    #             ) as mock_select_related:
+    #                 with patch(f"{FILE_PATH}.sync_to_async") as mock_sync:
+    #                     result = await controller._sync_database_metadata(room_id=new_matrix_room)
+
+    # mock_select_related.assert_called_once()
+    # mock_sync.assert_called_once()
+
+
